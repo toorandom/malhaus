@@ -1,4 +1,6 @@
-# malhaus
+<p align="center">
+  <img src="docs/malhaus_logo_light.png" alt="malhaus" width="480"/>
+</p>
 
 Self-hosted **malware static triage platform** powered by LLMs.
 
