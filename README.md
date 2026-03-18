@@ -126,6 +126,8 @@ All API responses are **JSON**. Submitting a file returns a `job_id` immediately
 
 Add `?include=images,takens2d` to also receive the entropy profile, compression curve, bigram matrix, and trigram point cloud as base64 PNGs with LLM interpretations.
 
+Every web report also exposes its raw JSON at `GET /report/<sha256>/json` — no authentication needed. A **JSON ↗** link appears on every report page.
+
 - [REST API reference](README-API.md) — full endpoint docs, all request/response formats, curl and Python examples
 - [MCP server](README-MCP.md) — connect Claude Desktop, Cursor, Continue, or any MCP client
 - [API key management](README-API-KEY-MGNT.md) — create, list, revoke keys

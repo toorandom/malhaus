@@ -64,6 +64,18 @@ A live instance is running at **https://grothendieck.ff2.nl** — you can use it
 
 ## Endpoints
 
+### `GET /report/<sha256>/json`
+
+Returns the raw analysis JSON for any previously analyzed file — no authentication required. This is the same data rendered in the web report, available as machine-readable JSON directly from the report URL.
+
+```bash
+curl https://<your-domain>/report/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/json
+```
+
+A **JSON ↗** button linking to this endpoint appears on every web report page.
+
+---
+
 ### `POST /api/v1/upload`
 
 Stage a file for analysis. Returns `file_id` and `sha256` of the uploaded file. If the file was already analyzed the response sets `cached: true` and includes `report_url` — no need to call `/analyze` again.
