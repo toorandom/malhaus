@@ -18,11 +18,21 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 - Supports **Gemini, OpenAI, Azure AI Foundry, Claude, DeepSeek**, and any OpenAI-compatible server (Ollama, vLLM, LM Studio)
 - REST API with Bearer token authentication and per-key rate limiting
 - MCP server — AI agents (Claude, Cursor, Continue…) can call `analyze` natively
-- 3D byte-trigram point cloud with HDBSCAN density clusters
-- Entropy profile, bigram matrix, compression curve visualizations
+- Mathematical analysis visualizations — entropy profile, compression curve, bigram matrix, and a 3D byte-trigram point cloud with HDBSCAN density clustering
 - Optional Ghidra headless decompilation (PE/ELF)
 - Result cache by SHA-256 — re-submitting the same file is instant
 - Captcha-protected web UI; API bypasses captcha with a token
+
+### Mathematical analysis
+
+Every file is analysed through four independent visualizations derived purely from its byte sequence:
+
+- **Entropy profile** — sliding-window Shannon entropy plotted across the file offset. Flat high-entropy regions indicate compression or encryption; structured dips reveal headers, overlays, or plaintext sections.
+- **Compression curve** — the file is compressed at every level with zlib, bz2, and lzma. The resulting ratio curves distinguish truly random data (flat near 1.0) from structured or already-compressed content.
+- **Bigram matrix** — a 256×256 heatmap of consecutive byte-pair frequencies. Packed or encrypted files produce uniform noise; executables and documents leave recognisable diagonal and off-diagonal patterns that fingerprint the file format.
+- **Byte-trigram point cloud** — every overlapping triple of bytes is treated as a 3D coordinate. PCA reduces the cloud to 2D and HDBSCAN groups points into density clusters, each rendered in a distinct colour. The shape of the cloud and the number of clusters expose structural regions (null padding, code, strings, overlays) at a glance.
+
+All four charts are interpreted by the LLM as part of the triage pipeline.
 
 ![Mathematical analysis visualizations](docs/screenshot-analysis.png)
 
