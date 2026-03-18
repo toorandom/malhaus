@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import requests
 from flask import stream_with_context
 from tools.cli_tools import detect_file_type
-from flask import Blueprint, render_template, request, redirect, url_for, flash, make_response, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, make_response, current_app, jsonify
 
 from agent.triage_agent import analyze
 import config
@@ -456,7 +456,26 @@ def report_sha(sha256: str):
         filename = rec["filename"]
     except (IndexError, KeyError):
         filename = None
-    return render_template("report.html", result=result, filename=filename, ip=_client_ip(request), remaining=max(0, config.MAX_PER_HOUR_PER_IP - _used_in_last_hour(_client_ip(request))), llm_debug=config.LLM_DEBUG_IN_REPORT)
+    return render_template("report.html", result=result, filename=filename, sha256=sha256, ip=_client_ip(request), remaining=max(0, config.MAX_PER_HOUR_PER_IP - _used_in_last_hour(_client_ip(request))), llm_debug=config.LLM_DEBUG_IN_REPORT)
+
+
+@bp.get("/report/<sha256>/json")
+def report_sha_json(sha256: str):
+    """Return the raw analysis JSON for a given SHA-256 (same data as the web report)."""
+    _ensure_tables()
+    con = _db()
+    try:
+        rec = con.execute(
+            "SELECT report_json FROM web_recents WHERE sha256 = ? ORDER BY analyzed_at DESC LIMIT 1",
+            (sha256,),
+        ).fetchone()
+    finally:
+        con.close()
+    if not rec or not rec["report_json"]:
+        return jsonify({"error": "No report found for that SHA-256"}), 404
+    return current_app.response_class(
+        rec["report_json"], status=200, mimetype="application/json"
+    )
 
 
 def _sha256_file(p: Path) -> str:

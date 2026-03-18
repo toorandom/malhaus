@@ -14,7 +14,10 @@
         <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
         <div class="sub muted">Triage report{% if result.get('analysis_seconds') is not none %} &mdash; analyzed in <span class="mono">{{ result.get('analysis_seconds') }}s</span>{% endif %}</div>
       </div>
-      <a class="btn ghost" href="{{ url_for('bp.index') }}">← Back</a>
+      <div style="display:flex;gap:8px;align-items:center;">
+        {% if sha256 %}<a class="btn ghost" href="{{ url_for('bp.report_sha_json', sha256=sha256) }}" target="_blank" rel="noopener" style="font-size:11px;">JSON ↗</a>{% endif %}
+        <a class="btn ghost" href="{{ url_for('bp.index') }}">← Back</a>
+      </div>
     </header>
 
     {% set v = result.get('verdict', {}) %}
