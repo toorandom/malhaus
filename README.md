@@ -6,6 +6,8 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 
 **Live demo:** [https://grothendieck.ff2.nl](https://grothendieck.ff2.nl)
 
+![Triage report](docs/screenshot-report.png)
+
 ---
 
 ## Features
@@ -19,6 +21,8 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 - Optional Ghidra headless decompilation (PE/ELF)
 - Result cache by SHA-256 — re-submitting the same file is instant
 - Captcha-protected web UI; API bypasses captcha with a token
+
+![Mathematical analysis visualizations](docs/screenshot-analysis.png)
 
 ---
 
