@@ -105,7 +105,28 @@ See `.env.example` for full configuration examples.
 
 ## API & MCP
 
-- [REST API reference](README-API.md) — upload files, submit URLs, poll jobs, fetch results
+All API responses are **JSON**. Submitting a file returns a `job_id` immediately; you poll `GET /api/v1/jobs/<job_id>` until done:
+
+```json
+{
+  "status":          "done",
+  "sha256":          "e3b0c442...",
+  "report_url":      "/report/e3b0c442...",
+  "verdict": {
+    "risk_level":    "likely_malware",
+    "confidence":    92,
+    "file_type":     "PE32 executable"
+  },
+  "heuristic_score": 74,
+  "top_reasons":     ["High entropy sections consistent with packing", "..."],
+  "tools_used":      ["mandatory_authenticode_verify", "mandatory_objdump_pe_headers", "..."],
+  "tool_outputs":    { "mandatory_authenticode_verify": { "stdout": "...", "error": null } }
+}
+```
+
+Add `?include=images,takens2d` to also receive the entropy profile, compression curve, bigram matrix, and trigram point cloud as base64 PNGs with LLM interpretations.
+
+- [REST API reference](README-API.md) — full endpoint docs, all request/response formats, curl and Python examples
 - [MCP server](README-MCP.md) — connect Claude Desktop, Cursor, Continue, or any MCP client
 - [API key management](README-API-KEY-MGNT.md) — create, list, revoke keys
 - [Adding a new analysis tool](README-CREATE-NEW-TOOL.md) — extend the pipeline
