@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+# Usage: ./r2_call <binary>
+# Requires: radare2, jq
+
+set -euo pipefail
+
+BIN="${1:-}"
+
+if [[ -z "$BIN" || ! -f "$BIN" ]]; then
+    echo "Usage: $0 <binary>"
+    exit 1
+fi
+
+command -v r2 >/dev/null || { echo "[-] radare2 not found"; exit 1; }
+command -v jq >/dev/null || { echo "[-] jq not found"; exit 1; }
+
+echo "[+] Analyzing $BIN"
+
+# ------------------------------------------------------------
+# Step 1: Get JSON disassembly of entry0
+# ------------------------------------------------------------
+PDJ_JSON=$(r2 -2 -q "$BIN" << 'EOF'
+e scr.color=false
+aa
+s entry0
+pdj 100
+EOF
+)
+
+# ------------------------------------------------------------
+# Step 2: Extract first call / jump target
+# ------------------------------------------------------------
+FIRST_CALL=$(echo "$PDJ_JSON" | jq -r '
+  .[]
+  | select(
+      .type=="call" or
+      .type=="ucall" or
+      .type=="jmp" or
+      .type=="ujmp"
+    )
+  | .jump
+' | head -n 1)
+
+if [[ -z "$FIRST_CALL" || "$FIRST_CALL" == "null" ]]; then
+    echo "[-] No call or jump found in entry0"
+    exit 1
+fi
+
+echo "[+] First call target: $FIRST_CALL"
+
+# ------------------------------------------------------------
+# Step 3: Analyze the callee
+# ------------------------------------------------------------
+r2 -2 -q "$BIN" << EOF
+e scr.color=false
+aa
+s $FIRST_CALL
+
+echo "================ DISASSEMBLY (pdf) ================"
+pdf
+
+echo "================ CALLS (aflm) ====================="
+aflm
+
+echo "================ XREFS (axt) ======================"
+axt
+EOF

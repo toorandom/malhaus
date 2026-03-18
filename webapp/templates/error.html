@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="bg">
+  <div class="wrap">
+    <header class="header header-black">
+      <div class="brand-block">
+        <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
+        <div class="sub muted">{{ title }}</div>
+      </div>
+      <a class="btn ghost" href="{{ url_for('bp.index') }}">← Back</a>
+    </header>
+
+    <section class="card">
+      <div class="muted">{{ message }}</div>
+    </section>
+
+    <footer class="footer">
+      <span class="mono muted">malhaus 2026</span>
+    </footer>
+  </div>
+</body>
+</html>

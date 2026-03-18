@@ -1,0 +1,29 @@
+# Secrets — never commit these
+.env
+config.source
+
+# Runtime data
+maltriage.db
+uploads/
+logs/
+extracted/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Build artefacts
+*.tar.gz
+maltriage-backup/
+maltriage-public/
+
+# Editor / tool leftovers
+*.bak
+*.py2
+.claude/
+
+# Tests directory — dev tooling, not needed by users
+tests/

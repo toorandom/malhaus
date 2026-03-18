@@ -1,0 +1,24 @@
+# Python environment — rebuilt inside the image
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Runtime data — mounted as volumes, not baked into the image
+maltriage.db
+uploads/
+logs/
+extracted/
+
+# Secrets — injected via .env at runtime, never in the image
+config.source
+.env
+
+# Backups and dev artefacts
+maltriage-backup/
+*.tar.gz
+
+# Git
+.git/
+.gitignore

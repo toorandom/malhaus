@@ -1,0 +1,30 @@
+services:
+  malhaus:
+    build: .
+    image: malhaus:stable
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./maltriage.db:/app/maltriage.db
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    expose:
+      - "8000"
+    # firejail needs these capabilities inside the container
+    cap_add:
+      - SYS_PTRACE
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:false
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/malhaus.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - malhaus

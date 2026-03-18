@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>malhaus</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+
+</head>
+<body class="bg">
+  <div class="wrap">
+
+    <header class="header header-black">
+      <div class="brand-block">
+        <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
+        <div class="byline">
+          <span class="tagline">AI Malware Analysis v0.2</span>
+          <span class="sep">·</span>
+          by Eduardo Duarte · <span class="mono">toorandom@gmail.com</span>
+        </div>
+      </div>
+
+      <div class="header-right-col">
+        <div class="mono muted small">
+          IP <span class="mono">{{ ip }}</span> · left <span class="mono">{{ remaining }}</span>/<span class="mono">{{ max_per_hour }}</span>
+        </div>
+        <div class="header-actions">
+          <a class="btn ghost" href="{{ url_for('bp.about') }}">About</a>
+        </div>
+      </div>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="alerts">
+          {% for category, message in messages %}
+            <div class="alert {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <section class="card">
+      <div class="row">
+        <h2>Upload</h2>
+        <div class="muted mono">Max {{ max_mb }} MB</div>
+      </div>
+
+      <div class="muted" style="margin:6px 0 10px 0;">
+        Supported: <span class="mono">PE, ELF, Office, PS1, Shell, JS, MSI, PDF, LNK, VBS, HTA, ZIP, 7z, RAR</span>
+      </div>
+
+      <form id="uploadForm" class="upload" action="{{ url_for('bp.upload') }}" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input id="fileInput" class="file-native" type="file" name="file">
+
+        <!-- One unified picker box -->
+        <div class="pickbox">
+          <div class="pickgrid">
+            <div class="pickleft">
+              <div class="filepick">
+                <label class="filebtn" for="fileInput">Choose file</label>
+                <div id="fileName" class="filename mono">No file selected</div>
+              </div>
+
+              <div class="urllegend mono muted">Or paste URL</div>
+              <input class="urlin mono" type="text" name="url" placeholder="http(s)://… (optional)">
+
+              <div class="urllegend mono muted">Or paste SHA-256 (cached)</div>
+              <input id="shaLookup" class="urlin mono" type="text" name="sha256_lookup" placeholder="64-hex SHA-256… (cached lookup)">
+
+              <div id="passwordWrap" style="display:none;">
+                <div class="urllegend mono muted" style="color:#f0a500;">Archive password (leave blank if none)</div>
+                <input id="archivePassword" class="urlin mono" type="password" name="archive_password" placeholder="password (optional)" autocomplete="off">
+              </div>
+            </div>
+	      <!-- GHIDRA -->
+	      <div class="row" style="margin-top:10px;">
+  <label class="muted mono" style="display:flex; gap:10px; align-items:center;">
+    <input type="checkbox" name="use_ghidra" value="1">
+    <span><b>Enable Ghidra</b> (EXPERIMENTAL: might take minutes, it is java.. meh... so be patient)</span>
+  </label>
+</div>
+		<!-- END GHIDRA -->
+
+            <div class="pickright">
+              <button id="analyzeBtn" class="btn btn-big" type="submit">Analyze</button>
+            </div>
+          </div>
+        </div>
+      </form>
+<div id="hackWrap" style="display:none; margin-top:14px;">
+  <div id="dotAnimation" class="mono" style="letter-spacing:1px; color:var(--text);"></div>
+  <div id="progressLog" class="mono" style="margin-top:6px; color:var(--muted); font-size:11px; line-height:1.6; max-height:220px; overflow-y:auto;"></div>
+  <div id="bgNotice" class="mono muted" style="margin-top:8px; font-size:11px; color:var(--muted); border-top:1px solid rgba(255,255,255,.08); padding-top:8px;">
+    ⏳ This may take a few minutes. Feel free to open another tab — this tab will <strong>notify you</strong> when the analysis is done, or you can find the result later in <strong>Recent Analyses</strong>.
+  </div>
+</div>
+
+      <div class="hint">Tip: results are cached locally by SHA-256 (see “Recent analyses”).</div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>Recent analyses</h2>
+        <div class="muted">Latest 10</div>
+      </div>
+
+      {% if recents and recents|length > 0 %}
+      <div class="table">
+        <div class="tr th">
+          <div>Time</div>
+          <div>File</div>
+          <div>SHA-256</div>
+          <div>Type</div>
+          <div>IP</div>
+          <div>Risk</div>
+          <div>Confidence</div>
+          <div>Score</div>
+        </div>
+
+        {% for r in recents %}
+        <div class="tr">
+          <div class="mono muted">{{ r["analyzed_at"] }}</div>
+          <div class="mono break">{{ r["filename"] }}</div>
+          <div class="mono break">{% if r["sha256"] %}<a class="hashlink mono" href="{{ url_for('bp.report_sha', sha256=r['sha256']) }}">{{ r["sha256"] }}</a>{% else %}—{% endif %}</div>
+          <div class="mono muted">{{ r["kind"] }}</div>
+          <div class="mono muted">{{ r["ip"] if "ip" in r.keys() else "—" }}</div>
+          <div><span class="badge {{ r["risk_level"] }}">{{ r["risk_level"] }}</span></div>
+          <div class="mono">{{ r["confidence"] }}</div>
+          <div class="mono">{{ r["score"] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+        <div class="muted">No analyses yet.</div>
+      {% endif %}
+    </section>
+
+    <footer class="footer">
+      <span class="mono muted">malhaus 2026</span>
+      <span class="mono muted">Local DB: maltriage.db</span>
+    </footer>
+
+<script>
+(function(){
+  const fileInput     = document.getElementById("fileInput");
+  const fileName      = document.getElementById("fileName");
+  const form          = document.getElementById("uploadForm");
+  const btn           = document.getElementById("analyzeBtn");
+  const hackWrap      = document.getElementById("hackWrap");
+  const progressLog   = document.getElementById("progressLog");
+  const dotAnim       = document.getElementById("dotAnimation");
+  let   _startTime    = 0;
+  function _logMsg(text, color) {
+    const elapsed = ((Date.now() - _startTime) / 1000).toFixed(1);
+    const line = document.createElement("div");
+    line.textContent = "[+" + elapsed + "s] " + text;
+    if (color) line.style.color = color;
+    progressLog.appendChild(line);
+    progressLog.scrollTop = progressLog.scrollHeight;
+  }
+  const urlInput      = document.querySelector('input[name="url"]');
+  const passwordWrap  = document.getElementById("passwordWrap");
+
+  function _isArchive(name) {
+    return /\.(zip|7z|rar|gz|tar\.gz|tgz)$/i.test((name || "").split("?")[0]);
+  }
+  function _updatePasswordVisibility() {
+    const fname = (fileInput.files && fileInput.files[0]) ? fileInput.files[0].name : "";
+    const uval  = urlInput ? urlInput.value.trim() : "";
+    passwordWrap.style.display = (_isArchive(fname) || _isArchive(uval)) ? "block" : "none";
+  }
+
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileName.textContent = f ? f.name : "No file selected";
+    fileName.style.color = f ? "var(--text)" : "var(--muted)";
+    _updatePasswordVisibility();
+  });
+
+  if (urlInput) urlInput.addEventListener("input", _updatePasswordVisibility);
+
+  form.addEventListener("submit", async function(e) {
+    const sha = (document.getElementById('shaLookup')?.value || '').trim();
+    if (sha && /^[a-fA-F0-9]{64}$/.test(sha)) {
+      window.location.href = '/report/' + sha.toLowerCase();
+      return;
+    }
+
+    e.preventDefault();
+    hackWrap.style.display = "block";
+    btn.disabled = true;
+    btn.textContent = "Analyzing…";
+    progressLog.innerHTML = "";
+    dotAnim.textContent = "";
+    _startTime = Date.now();
+    _logMsg("Uploading…");
+
+    // Hacker scanner animation
+    const _spin = ['/', '-', '\\', '|'];
+    const _h = '0123456789abcdef';
+    const _SCAN = 30, _FILL = 8;
+    let _f = 0;
+    function _rh(n){ let s=''; for(let i=0;i<n;i++) s+=_h[Math.random()*16|0]; return s; }
+    const dotTimer = setInterval(() => {
+      const total = (_SCAN - _FILL) * 2;
+      const raw = _f % total;
+      const pos = raw < (_SCAN - _FILL) ? raw : total - raw;
+      let bar = '';
+      for(let i=0;i<_SCAN;i++) bar += (i>=pos && i<pos+_FILL) ? '▓' : '░';
+      dotAnim.textContent = _spin[_f%4] + ' [' + bar + '] ' + _rh(4) + ':' + _rh(4) + ':' + _rh(4);
+      _f++;
+    }, 100);
+
+    try {
+      const resp = await fetch(form.action, {method: "POST", body: new FormData(form)});
+      if (!resp.ok) throw new Error("Server error " + resp.status);
+
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream: true});
+
+        // consume complete SSE lines from buffer
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith("data: ")) continue;
+          let ev;
+          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (ev.redirect) {
+            clearInterval(dotTimer);
+            // Blink the tab title to notify the user, then redirect
+            const _origTitle = document.title;
+            let _blink = 0;
+            const _blinkTimer = setInterval(() => {
+              document.title = (_blink % 2 === 0) ? '✓ Analysis done! — malhaus' : _origTitle;
+              _blink++;
+              if (_blink >= 8) {
+                clearInterval(_blinkTimer);
+                document.title = _origTitle;
+                window.location.href = ev.redirect;
+              }
+            }, 500);
+            return;
+          }
+          if (ev.msg)   _logMsg(ev.msg + "…");
+          if (ev.error) {
+            clearInterval(dotTimer);
+            _logMsg("Error: " + ev.error, "#e05555");
+            btn.disabled = false;
+            btn.textContent = "Analyze";
+          }
+        }
+      }
+    } catch(err) {
+      clearInterval(dotTimer);
+      _logMsg("Error: " + err.message, "#e05555");
+      btn.disabled = false;
+      btn.textContent = "Analyze";
+    }
+  });
+})();
+
+// Reload on bfcache restore (back/forward navigation) so the form is always fresh
+window.addEventListener("pageshow", function(e) {
+  if (e.persisted) { window.location.reload(); }
+});
+</script>
+
+    <div class="pager">
+      {% if has_prev %}<a class="btn ghost" href="/?page={{ page - 1 }}">← Prev</a>{% else %}<span></span>{% endif %}
+      <div class="muted small mono">page {{ page }}</div>
+      {% if has_next %}<a class="btn ghost" href="/?page={{ page + 1 }}">Next →</a>{% else %}<span></span>{% endif %}
+    </div>
+
+  </div>
+
+</body>
+</html>

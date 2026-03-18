@@ -1,0 +1,82 @@
+#!/bin/bash
+export MALHAUS_DIR="/opt/malhaus"
+# Set to 1 if running behind a reverse proxy (nginx/caddy) so real client IP
+# is read from X-Forwarded-For instead of remote_addr (which would be 127.0.0.1)
+export MALHAUS_TRUSTED_PROXY="1"
+export MALHAUS_MAX_UPLOAD_MB="5"
+export MALHAUS_MAX_PER_HOUR="20"
+export MALHAUS_MAX_CONCURRENT="3"
+# --- LLM provider -----------------------------------------------------------
+# Supported: gemini | openai | azure | deepseek | claude | ollama
+export MALHAUS_LLM_PROVIDER="gemini"
+
+# API key for the selected provider (leave empty to rely on provider env vars)
+export MALHAUS_LLM_API_KEY="your-api-key-here"
+
+# Optional custom endpoint (required for: azure, ollama, deepseek self-hosted)
+# azure   → https://<resource>.openai.azure.com/
+# ollama  → http://localhost:11434
+# deepseek self-hosted → http://your-server/v1
+export MALHAUS_LLM_ENDPOINT=""
+
+# Model overrides per stage (strings first-pass vs full verdict)
+export MALHAUS_MODEL_STRINGS="gemini-2.5-flash"
+export MALHAUS_MODEL_VERDICT="gemini-3.1-pro-preview"
+
+export MALHAUS_LLM_TIMEOUT=60
+export MALHAUS_LLM_DEBUG_IN_REPORT=1
+
+# ---- Provider-specific examples (uncomment the block you want) -------------
+#
+# # OpenAI
+# export MALHAUS_LLM_PROVIDER="openai"
+# export MALHAUS_LLM_API_KEY="sk-..."
+# export MALHAUS_MODEL_STRINGS="gpt-4o-mini"
+# export MALHAUS_MODEL_VERDICT="gpt-4o"
+#
+# # Azure OpenAI
+# export MALHAUS_LLM_PROVIDER="azure"
+# export MALHAUS_LLM_API_KEY="<azure-api-key>"
+# export MALHAUS_LLM_ENDPOINT="https://<resource>.openai.azure.com/"
+# export MALHAUS_MODEL_STRINGS="gpt-4o-mini"   # deployment name
+# export MALHAUS_MODEL_VERDICT="gpt-4o"
+#
+# # DeepSeek (cloud)
+# export MALHAUS_LLM_PROVIDER="deepseek"
+# export MALHAUS_LLM_API_KEY="sk-..."
+# export MALHAUS_MODEL_STRINGS="deepseek-chat"
+# export MALHAUS_MODEL_VERDICT="deepseek-chat"
+# export MALHAUS_LLM_ENDPOINT=""  # leave empty to use https://api.deepseek.com
+#
+# # Anthropic Claude
+# export MALHAUS_LLM_PROVIDER="claude"
+# export MALHAUS_LLM_API_KEY="sk-ant-..."
+# export MALHAUS_MODEL_STRINGS="claude-haiku-4-5-20251001"
+# export MALHAUS_MODEL_VERDICT="claude-sonnet-4-6"
+#
+# # Ollama (local)
+# export MALHAUS_LLM_PROVIDER="ollama"
+# export MALHAUS_LLM_ENDPOINT="http://localhost:11434"
+# export MALHAUS_MODEL_STRINGS="llama3.1:8b"
+# export MALHAUS_MODEL_VERDICT="llama3.1:70b"
+# export MALHAUS_LLM_API_KEY=""
+# ---------------------------------------------------------------------------
+
+# LangChain Gemini also reads these env vars directly:
+export GOOGLE_API_KEY="${MALHAUS_LLM_API_KEY}"
+export GEMINI_API_KEY="${MALHAUS_LLM_API_KEY}"
+# Flask secret key — generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+export MALHAUS_SECRET_KEY="generate-with-python3-c-import-secrets-print-secrets.token_hex-32"
+
+export MALHAUS_GHIDRA_DIR="/opt/ghidra/"
+
+# --- Ghidra needs JDK 21+ ---
+export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# --- Ghidra needs JDK 21+ ---
+export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Web UI captcha (1=enabled, 0=disabled)
+export MALHAUS_CAPTCHA_ENABLED=1

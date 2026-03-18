@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About · malhaus</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="bg">
+  <div class="wrap">
+
+    <header class="header header-black">
+      <div class="brand-block">
+        <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
+        <div class="sub muted">About</div>
+      </div>
+      <a class="btn ghost" href="{{ url_for('bp.index') }}">← Back</a>
+    </header>
+
+    <section class="card">
+      <h2>What is malhaus?</h2>
+      <p style="line-height:1.7;margin:0 0 14px;">
+        malhaus is a self-hosted malware static triage platform. Submit a suspicious file or URL and it tells you whether it is malware, what it does, and why it thinks so — without executing the file.
+      </p>
+      <p style="line-height:1.7;margin:0 0 14px;" class="muted">
+        It combines three things that are usually separate: classic static analysis CLI tools run automatically per file type; deterministic heuristics that score evidence without any LLM; and an LLM verdict loop that receives the full evidence pack, can request additional tool calls, and returns a final verdict with confidence and top reasons.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>How it works</h2>
+      <div class="grid" style="margin-bottom:14px;">
+        <div class="kv">
+          <div class="k">1 · Preflight</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">File type is detected by magic bytes first, extension second. Type-specific CLI tools run automatically — authenticode, objdump, radare2 for PE; readelf and ldd for ELF; oledump and olevba for Office; and so on. Archives are extracted and the inner payload promoted to full analysis.</div>
+        </div>
+        <div class="kv">
+          <div class="k">2 · Heuristics</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">Entropy, IOC patterns, encoded string detection, embedded payload extraction, and import name matching produce a numeric risk score (0–100) and a risk hint — all deterministic, no LLM involved.</div>
+        </div>
+        <div class="kv">
+          <div class="k">3 · LLM verdict</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">The LLM receives the evidence pack and can call additional tools (up to 6 times) before returning a final verdict: <span class="mono">risk_level</span>, <span class="mono">confidence</span>, <span class="mono">top_reasons</span>, and extracted IOCs. A faster model pre-screens raw strings before the verdict pass.</div>
+        </div>
+        <div class="kv">
+          <div class="k">4 · Visualizations</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">Every report includes an entropy profile, compression curve, byte bigram matrix, and an interactive 3D byte trigram point cloud (WebGL) with a PCA 2D projection — all computed from raw bytes, no execution required.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Supported file types</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin-top:4px;">
+        <div><span class="pill mono" style="font-size:11px;">pe</span> <span class="muted" style="font-size:12px;">Windows executables and DLLs — authenticode, objdump, radare2, FLOSS, optional Ghidra</span></div>
+        <div><span class="pill mono" style="font-size:11px;">elf</span> <span class="muted" style="font-size:12px;">Linux binaries — readelf, objdump, ldd, optional Ghidra</span></div>
+        <div><span class="pill mono" style="font-size:11px;">office</span> <span class="muted" style="font-size:12px;">doc / xls / rtf — oledump, olevba, oleobj, rtfobj</span></div>
+        <div><span class="pill mono" style="font-size:11px;">office_openxml</span> <span class="muted" style="font-size:12px;">docx / xlsx / pptx — macro and relationship extraction</span></div>
+        <div><span class="pill mono" style="font-size:11px;">pdf</span> <span class="muted" style="font-size:12px;">PDF — keyword scan, pdfid, pdf-parser</span></div>
+        <div><span class="pill mono" style="font-size:11px;">msi</span> <span class="muted" style="font-size:12px;">Windows installers — 7z extraction, inner PE analysis</span></div>
+        <div><span class="pill mono" style="font-size:11px;">lnk</span> <span class="muted" style="font-size:12px;">Windows shortcuts — target, arguments, metadata</span></div>
+        <div><span class="pill mono" style="font-size:11px;">archive</span> <span class="muted" style="font-size:12px;">zip / 7z / rar — extraction, inner payload promotion, password support</span></div>
+        <div><span class="pill mono" style="font-size:11px;">ps1 / vbs / js / sh</span> <span class="muted" style="font-size:12px;">Scripts — content analysis, base64 blob extraction</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Who made this</h2>
+      <p style="line-height:1.7;margin:0 0 10px;">
+        malhaus was built by <strong>Eduardo Duarte</strong>, a mathematics researcher and security practitioner who did his PhD at the <a href="https://www.rug.nl" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">University of Groningen</a>.
+      </p>
+      <p style="line-height:1.7;margin:0;" class="muted" style="font-size:12px;">
+        The name is a play on Bauhaus — triage as craft. The byte trigram visualization is an original application of delay-coordinate geometry (inspired by <a href="https://en.wikipedia.org/wiki/Takens%27s_theorem" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Takens' theorem</a>) to malware byte streams.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Access</h2>
+      <div class="grid">
+        <div class="kv">
+          <div class="k">Web</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">CAPTCHA-protected, per-IP rate limited. Results cached by SHA-256 — submitting the same file twice returns instantly.</div>
+        </div>
+        <div class="kv">
+          <div class="k">REST API</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">Bearer token authentication, async job polling, per-key rate limits. API results appear in the web index alongside browser submissions. See <span class="mono">README-API.md</span>.</div>
+        </div>
+        <div class="kv">
+          <div class="k">MCP</div>
+          <div class="v muted" style="font-size:12px;line-height:1.6;">Remote MCP server with OAuth 2.0 — AI agents (Claude, Cursor, Copilot, Semantic Kernel) can call the <span class="mono">analyze</span> tool natively. See <span class="mono">README-MCP.md</span>.</div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span class="mono muted">malhaus 2026</span>
+    </footer>
+  </div>
+</body>
+</html>

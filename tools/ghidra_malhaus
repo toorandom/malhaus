@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die(){ echo "[-] $*" >&2; exit 1; }
+
+if [[ $# -lt 1 ]]; then
+  die "Usage: $0 /path/to/exe [timeout_sec]"
+fi
+
+SAMPLE_PATH="$(realpath "$1")"
+[[ -f "$SAMPLE_PATH" ]] || die "File not found: $SAMPLE_PATH"
+TIMEOUT="${2:-60}"   # seconds per file — 60s keeps fast analyzers, kills slow Decompiler Parameter ID
+
+: "${MALHAUS_GHIDRA_DIR:?MALHAUS_GHIDRA_DIR not set}"
+: "${JAVA_HOME:?JAVA_HOME not set}"
+
+ANALYZE="${MALHAUS_GHIDRA_DIR%/}/support/analyzeHeadless"
+[[ -x "$ANALYZE" ]] || die "analyzeHeadless not executable: $ANALYZE"
+[[ -x "$JAVA_HOME/bin/java" ]] || die "JAVA_HOME/bin/java missing: $JAVA_HOME/bin/java"
+
+PROJECT_DIR="/tmp/gh_full_proj"
+PROJECT_NAME="fullproj"
+SCRIPT_DIR="/tmp"
+SCRIPT_NAME="MalhausFullScan.java"
+EMPTY_DLL_DIR="/tmp/ghidra_dll_empty"
+OUTFILE="/tmp/ghidra_llm_report.txt"
+
+mkdir -p "$PROJECT_DIR" "$SCRIPT_DIR" "$EMPTY_DLL_DIR" || die "Failed to create required dirs"
+
+CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+MAX_CPU="${MALHAUS_GHIDRA_MAX_CPU:-$CORES}"
+IMPORTED_NAME="$(basename "$SAMPLE_PATH")"
+
+# temp log: swallow ALL ghidra/analyzeHeadless noise here
+LOGFILE="$(mktemp -t malhaus_ghidra_fullscan.XXXXXX.log)"
+cleanup() { rm -f "$LOGFILE"; }
+trap cleanup EXIT
+
+# -----------------------------
+# Java postScript (dual score; output only malice_score>0)
+# -----------------------------
+cat > "$SCRIPT_DIR/$SCRIPT_NAME" <<'JAVA'
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.regex.*;
+
+import ghidra.app.decompiler.*;
+import ghidra.app.script.GhidraScript;
+import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.*;
+import ghidra.program.model.symbol.*;
+import ghidra.program.model.lang.*;
+import ghidra.program.model.address.*;
+
+public class MalhausFullScan extends GhidraScript {
+
+    static final Pattern IPV4 = Pattern.compile("\\b(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\b");
+    static final Pattern URL  = Pattern.compile("\\bhttps?://[^\\s\"']{6,}\\b", Pattern.CASE_INSENSITIVE);
+
+    static final String[] NET = {
+        "wsastartup","socket","connect","send","recv","getaddrinfo",
+        "winhttp","wininet","internetopen","internetconnect","httpopenrequest","httpsendrequest","internetreadfile",
+        "urldownloadtofile"
+    };
+
+    static final String[] CRYPTO = { "crypt","bcrypt","aes","rc4","chacha","sha256","hmac","base64" };
+    static final String[] DYNLOAD = { "loadlibrary","getprocaddress" };
+    static final String[] PROC = { "createprocess","openprocess","createprocessw","createprocessa" };
+
+    static final String[] INJECT = {
+        "writeprocessmemory","createremotethread","ntcreatethreadex","queueuserapc","setthreadcontext","getthreadcontext"
+    };
+
+    static final String[] PERSIST = {
+        "currentversion\\\\run","runonce","regsetvalue","regsetvalueex","regcreatekey","regcreatekeyex",
+        "createservice","openscmanager","startservice","schtasks"
+    };
+
+    static final String[] EVASION = {
+        "isdebuggerpresent","checkremotedebuggerpresent","ntqueryinformationprocess",
+        "queryperformancecounter","gettickcount","sleep","rdtsc","cpuid",
+        "vmware","virtualbox","qemu","sandbox"
+    };
+
+    static final String[] FILEIO = { "createfile","writefile","readfile","gettemppath","gettempfilename","movefile","copyfile","deletefile" };
+    static final String[] EXECISH = { "winexec","shellexecute","shellexecuteex","rundll32","powershell","cmd.exe","mshta","regsvr32" };
+
+    // UPDATED per your request:
+    static final int MAX_FUNCS_OUT = 60;
+    static final int MAX_LINES = 60;
+
+    static final int SCORE_DECOMP_QUICK_SEC = 2;  // reduced from 4 — simple functions finish fast
+
+    static boolean containsAny(String hayLower, String[] needles) {
+        for (String n : needles) if (hayLower.contains(n)) return true;
+        return false;
+    }
+
+    static int countAny(String hayLower, String[] needles) {
+        int c = 0;
+        for (String n : needles) if (hayLower.contains(n)) c++;
+        return c;
+    }
+
+    static boolean isPrivateOrLocalIp(String ip) {
+        if (ip.equals("0.0.0.0") || ip.equals("127.0.0.1")) return true;
+        if (ip.startsWith("10.")) return true;
+        if (ip.startsWith("192.168.")) return true;
+        if (ip.startsWith("172.")) {
+            try {
+                int second = Integer.parseInt(ip.split("\\.")[1]);
+                if (second >= 16 && second <= 31) return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    static String trimLines(String s, int maxLines) {
+        String[] lines = s.split("\n");
+        if (lines.length <= maxLines) return s;
+        StringBuilder sb = new StringBuilder();
+        for (int i=0; i<maxLines; i++) sb.append(lines[i]).append("\n");
+        sb.append("/* ... trimmed ... */\n");
+        return sb.toString();
+    }
+
+    static class FuncScore {
+        final Function f;
+        final int capScore;
+        final int malScore;
+        final List<String> combos;
+        final List<String> feats;
+        final String decompiledC;  // cached — avoids second decompile in output loop
+        FuncScore(Function f, int cap, int mal, List<String> combos, List<String> feats, String decompiledC) {
+            this.f = f; this.capScore = cap; this.malScore = mal; this.combos = combos; this.feats = feats;
+            this.decompiledC = decompiledC;
+        }
+    }
+
+    private List<String> rawIndicators() throws Exception {
+        List<String> out = new ArrayList<>();
+        Memory mem = currentProgram.getMemory();
+        long remaining = 10L * 1024 * 1024;
+
+        for (MemoryBlock b : mem.getBlocks()) {
+            if (monitor.isCancelled()) break;
+            if (!b.isInitialized()) continue;
+
+            String bn = b.getName().toLowerCase(Locale.ROOT);
+            if (!(bn.contains("rdata") || bn.contains("data") || bn.contains(".rdata") || bn.contains(".data") || bn.contains("const")))
+                continue;
+
+            long take = Math.min(b.getSize(), remaining);
+            if (take <= 0) break;
+            if (take > Integer.MAX_VALUE) take = Integer.MAX_VALUE;
+
+            byte[] buf = new byte[(int)take];
+            mem.getBytes(b.getStart(), buf);
+            remaining -= take;
+
+            String ascii = new String(buf, StandardCharsets.ISO_8859_1);
+
+            Matcher ip = IPV4.matcher(ascii);
+            while (ip.find() && out.size() < 120) {
+                String v = ip.group();
+                if (!isPrivateOrLocalIp(v)) out.add("ipv4:" + v);
+            }
+            Matcher url = URL.matcher(ascii);
+            while (url.find() && out.size() < 120) out.add("url:" + url.group());
+
+            String lower = ascii.toLowerCase(Locale.ROOT);
+            if (lower.contains("currentversion\\run")) out.add("str:runkey");
+            if (lower.contains("\\startup") || lower.contains("start menu\\programs\\startup")) out.add("str:startupfolder");
+            if (lower.contains("global\\")) out.add("str:global_mutex");
+            if (lower.contains("schtasks")) out.add("str:schtasks");
+            if (lower.contains("createremotethread") || lower.contains("writeprocessmemory")) out.add("str:injection");
+            if (lower.contains("powershell") || lower.contains("rundll32") || lower.contains("mshta") || lower.contains("regsvr32"))
+                out.add("str:lolbin");
+        }
+
+        return new ArrayList<>(new LinkedHashSet<>(out));
+    }
+
+    private FuncScore scoreFunction(DecompInterface ifc, Function f) {
+        // Skip thunks (import stubs) and tiny functions — not worth decompiling
+        if (f.isThunk()) return null;
+        if (f.getBody().getNumAddresses() < 20) return null;
+
+        DecompileResults res = ifc.decompileFunction(f, SCORE_DECOMP_QUICK_SEC, monitor);
+        if (res == null || !res.decompileCompleted() || res.getDecompiledFunction() == null) return null;
+        String c = res.getDecompiledFunction().getC();
+        if (c == null) return null;
+        String cl = c.toLowerCase(Locale.ROOT);
+
+        // capability_score (informative)
+        int cap = 0;
+        cap += 2 * countAny(cl, NET);
+        cap += 2 * countAny(cl, CRYPTO);
+        cap += 2 * countAny(cl, DYNLOAD);
+        cap += 2 * countAny(cl, PROC);
+        cap += 1 * countAny(cl, FILEIO);
+
+        // malice_score (weird combinations only)
+        int mal = 0;
+        List<String> combos = new ArrayList<>();
+        List<String> feats  = new ArrayList<>();
+
+        boolean hasInject = containsAny(cl, INJECT);
+        boolean hasPersist = containsAny(cl, PERSIST) || cl.contains("currentversion\\run") || cl.contains("\\startup");
+        boolean hasLolbin = containsAny(cl, EXECISH);
+        boolean hasNet = containsAny(cl, NET);
+        boolean hasDyn = containsAny(cl, DYNLOAD);
+        boolean hasEvasion = containsAny(cl, EVASION);
+        boolean hasFile = containsAny(cl, FILEIO);
+
+        boolean hasPublicIp = false;
+        Matcher ipm = IPV4.matcher(c);
+        while (ipm.find()) {
+            String ip = ipm.group();
+            if (!isPrivateOrLocalIp(ip)) { hasPublicIp = true; break; }
+        }
+        boolean hasUrl = URL.matcher(c).find();
+
+        int injectCount = countAny(cl, INJECT);
+        if (injectCount >= 2) { mal += 40; combos.add("INJECT_CHAIN(>=2)"); }
+        else if (hasInject)   { mal += 25; combos.add("INJECT_PRIMITIVE"); }
+
+        if (hasPersist) { mal += 20; combos.add("PERSISTENCE_MARKER"); }
+
+        if (hasNet && hasFile && (hasLolbin || containsAny(cl, PROC))) {
+            mal += 22; combos.add("NET+FILE+EXEC");
+        }
+
+        if ((hasPublicIp || hasUrl) && (hasNet || hasDyn)) {
+            mal += 28; combos.add("ENDPOINT+NET");
+        }
+
+        if (hasEvasion && (hasInject || hasPersist)) {
+            mal += 16; combos.add("EVASION+MALICE");
+        } else if (hasEvasion && hasNet) {
+            mal += 6; combos.add("EVASION+NET");
+        }
+
+        if (hasLolbin && hasPersist) { mal += 18; combos.add("LOLBIN+PERSIST"); }
+        if (hasDyn && (hasInject || hasPersist)) { mal += 12; combos.add("DYNLOAD+MALICE"); }
+
+        if (hasNet) feats.add("net");
+        if (containsAny(cl, CRYPTO)) feats.add("crypto");
+        if (hasDyn) feats.add("dynload");
+        if (containsAny(cl, PROC)) feats.add("proc");
+        if (hasFile) feats.add("fileio");
+        if (hasPersist) feats.add("persist");
+        if (hasInject) feats.add("inject");
+        if (hasEvasion) feats.add("evasion");
+        if (hasLolbin) feats.add("lolbin");
+        if (hasPublicIp) feats.add("pubip");
+        if (hasUrl) feats.add("url");
+
+        return new FuncScore(f, cap, mal, combos, feats, c);
+    }
+
+    // All suspicious keyword arrays merged for fast reference-based candidate selection
+    static final String[] ALL_SUSPICIOUS = {
+        "wsastartup","socket","connect","send","recv","getaddrinfo",
+        "winhttp","wininet","internetopen","internetconnect","httpopenrequest","httpsendrequest","internetreadfile",
+        "urldownloadtofile",
+        "crypt","bcrypt","aes","rc4","chacha","sha256","hmac","base64",
+        "loadlibrary","getprocaddress",
+        "createprocess","openprocess","createprocessw","createprocessa",
+        "writeprocessmemory","createremotethread","ntcreatethreadex","queueuserapc","setthreadcontext","getthreadcontext",
+        "currentversion\\\\run","runonce","regsetvalue","regsetvalueex","regcreatekey","regcreatekeyex",
+        "createservice","openscmanager","startservice","schtasks",
+        "isdebuggerpresent","checkremotedebuggerpresent","ntqueryinformationprocess",
+        "queryperformancecounter","gettickcount","sleep","rdtsc","cpuid",
+        "vmware","virtualbox","qemu","sandbox",
+        "createfile","writefile","readfile","gettemppath","gettempfilename","movefile","copyfile","deletefile",
+        "winexec","shellexecute","shellexecuteex","rundll32","powershell","cmd.exe","mshta","regsvr32"
+    };
+
+    /**
+     * Fast pre-scan: find functions that reference suspicious symbols via the reference manager.
+     * Avoids calling the decompiler on functions that have nothing interesting to say.
+     */
+    private Set<Function> findCandidates() {
+        Set<Function> candidates = new HashSet<>();
+        FunctionManager fm = currentProgram.getFunctionManager();
+        ReferenceManager refMgr = currentProgram.getReferenceManager();
+        SymbolTable st = currentProgram.getSymbolTable();
+
+        SymbolIterator allSyms = st.getAllSymbols(false);
+        while (allSyms.hasNext() && !monitor.isCancelled()) {
+            Symbol sym = allSyms.next();
+            String sname = sym.getName().toLowerCase(Locale.ROOT);
+            if (!containsAny(sname, ALL_SUSPICIOUS)) continue;
+
+            // For every reference pointing TO this symbol, find its containing function
+            for (Reference ref : refMgr.getReferencesTo(sym.getAddress())) {
+                Function caller = fm.getFunctionContaining(ref.getFromAddress());
+                if (caller != null && !caller.isThunk()) {
+                    candidates.add(caller);
+                }
+            }
+        }
+        return candidates;
+    }
+
+    @Override
+    public void run() throws Exception {
+        String outPath = (getScriptArgs().length > 0) ? getScriptArgs()[0] : "/tmp/ghidra_llm_report.txt";
+
+        List<String> raw = rawIndicators();
+
+        // Fast symbol-reference scan: only decompile functions that actually
+        // call suspicious APIs — avoids decompiling the entire binary
+        Set<Function> candidates = findCandidates();
+
+        DecompInterface ifc = new DecompInterface();
+        ifc.openProgram(currentProgram);
+        ifc.setSimplificationStyle("decompile");
+
+        List<FuncScore> scored = new ArrayList<>();
+        for (Function f : candidates) {
+            if (monitor.isCancelled()) break;
+            FuncScore fs = scoreFunction(ifc, f);
+            if (fs == null) continue;
+
+            // IMPORTANT: only preserve entries whose malice_score > 0
+            if (fs.malScore > 0) scored.add(fs);
+        }
+
+        scored.sort((a,b) -> {
+            int c = Integer.compare(b.malScore, a.malScore);
+            if (c != 0) return c;
+            c = Integer.compare(b.capScore, a.capScore);
+            if (c != 0) return c;
+            long asz = a.f.getBody().getNumAddresses();
+            long bsz = b.f.getBody().getNumAddresses();
+            return Long.compare(bsz, asz);
+        });
+
+        LanguageID langId = currentProgram.getLanguageID();
+        CompilerSpecID cspec = currentProgram.getCompilerSpec().getCompilerSpecID();
+
+        try (BufferedWriter w = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(outPath), StandardCharsets.UTF_8))) {
+            w.write("== Malhaus FULLSCAN (dual score: capability vs malice-combos) ==\n");
+            w.write("Program: " + currentProgram.getName() + "\n");
+            w.write("Language: " + langId + " | Compiler: " + cspec + "\n\n");
+
+            int globalMal = 0;
+            List<String> globalCombos = new ArrayList<>();
+
+            boolean hasEndpoint = raw.stream().anyMatch(s -> s.startsWith("ipv4:") || s.startsWith("url:"));
+            if (hasEndpoint) { globalMal += 18; globalCombos.add("GLOBAL_ENDPOINT"); }
+
+            boolean hasRunKey = raw.stream().anyMatch(s -> s.equals("str:runkey"));
+            boolean hasStartup = raw.stream().anyMatch(s -> s.equals("str:startupfolder"));
+            if (hasRunKey || hasStartup) { globalMal += 15; globalCombos.add("GLOBAL_PERSISTENCE_HINT"); }
+
+            boolean hasInjectStr = raw.stream().anyMatch(s -> s.equals("str:injection"));
+            if (hasInjectStr) { globalMal += 25; globalCombos.add("GLOBAL_INJECTION_HINT"); }
+
+            boolean hasLolbin = raw.stream().anyMatch(s -> s.equals("str:lolbin"));
+            if (hasLolbin && (hasRunKey || hasStartup)) { globalMal += 10; globalCombos.add("GLOBAL_LOLBIN+PERSIST"); }
+
+            w.write("== GLOBAL (compact) ==\n");
+            w.write("Raw indicators (" + raw.size() + "): " + String.join(", ", raw) + "\n");
+            w.write("Global malice_score=" + globalMal + " combos=" + String.join(", ", globalCombos) + "\n\n");
+
+            if (scored.isEmpty()) {
+                w.write("No functions with malice_score > 0 were found.\n");
+                return;
+            }
+
+            int limit = Math.min(MAX_FUNCS_OUT, scored.size());
+            for (int i=0; i<limit; i++) {
+                FuncScore fs = scored.get(i);
+                Function f = fs.f;
+
+                w.write("\n" + "=".repeat(88) + "\n");
+                w.write("#" + (i+1)
+                    + " malice_score=" + fs.malScore
+                    + " capability_score=" + fs.capScore
+                    + " size=" + f.getBody().getNumAddresses()
+                    + "\n");
+                w.write("Function: " + f.getName() + " @ " + f.getEntryPoint() + "\n");
+                if (!fs.feats.isEmpty()) w.write("feats: " + String.join(",", fs.feats) + "\n");
+                if (!fs.combos.isEmpty()) w.write("combos: " + String.join(", ", fs.combos) + "\n");
+
+                w.write("--- PSEUDOCODE (trimmed) ---\n");
+                // Use cached decompile result — no second decompiler call needed
+                if (fs.decompiledC != null && !fs.decompiledC.isEmpty()) {
+                    w.write(trimLines(fs.decompiledC, MAX_LINES));
+                } else {
+                    w.write("[decompile not available]\n");
+                }
+            }
+        }
+    }
+}
+JAVA
+
+# Single invocation: import + analyze + run script in one JVM startup.
+# Previously two separate calls (import, then process) meant two full JVM startups.
+"$ANALYZE" "$PROJECT_DIR" "$PROJECT_NAME" \
+  -import "$SAMPLE_PATH" \
+  -overwrite \
+  -max-cpu "$MAX_CPU" \
+  -librarySearchPaths "$EMPTY_DLL_DIR" \
+  -scriptPath "$SCRIPT_DIR" \
+  -analysisTimeoutPerFile "$TIMEOUT" \
+  -postScript "$SCRIPT_NAME" "$OUTFILE" >"$LOGFILE" 2>&1
+
+# Print the report to stdout (this is what your agent tool should capture)
+cat "$OUTFILE"

@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>malhaus report</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="bg">
+  <div class="wrap">
+
+    <header class="header header-black">
+      <div class="brand-block">
+        <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
+        <div class="sub muted">Triage report{% if result.get('analysis_seconds') is not none %} &mdash; analyzed in <span class="mono">{{ result.get('analysis_seconds') }}s</span>{% endif %}</div>
+      </div>
+      <a class="btn ghost" href="{{ url_for('bp.index') }}">← Back</a>
+    </header>
+
+    {% set v = result.get('verdict', {}) %}
+    {% set h = result.get('heuristics', {}) %}
+    {% set p = result.get('preflight', {}) %}
+    {% set kind = p.get('kind','') %}
+
+    {% macro show_block(title, data, limit=12000) -%}
+      {% set d = data or {} %}
+      {% set txt = d.get('stdout','') or '' %}
+      {% set err = d.get('error','') %}
+      {% set serr = d.get('stderr','') or '' %}
+      {% if not txt and err %}
+        {% set txt = '⚠ ' + err %}
+        {% if serr %}{% set txt = txt + '\n\nstderr:\n' + serr %}{% endif %}
+      {% elif not txt and serr %}
+        {% set txt = 'stderr:\n' + serr %}
+      {% endif %}
+      <details>
+        <summary class="mono">{{ title }}{% if txt and (txt|length) > limit %} <span class="muted">(truncated)</span>{% endif %}</summary>
+        <div class="codebox"><pre class="mono break">{{ (txt[:limit] if txt else 'Not collected.') }}</pre></div>
+      </details>
+    {%- endmacro %}
+
+    <section class="card">
+      <div style="display:flex;gap:20px;align-items:flex-start;">
+        <div style="flex:1;min-width:0;">
+          <div class="row">
+            <h2>LLM Verdict</h2>
+            <div class="row-right">
+              <span class="badge big {{ v.get('risk_level','unknown') }}">{{ v.get('risk_level','unknown') }}</span>
+              <span class="pill big">confidence <span class="mono">{{ v.get('confidence', 0) }}</span></span>
+            </div>
+          </div>
+
+          {% set _risk = v.get('risk_level','unknown') %}
+          {% set _risk_color = {'benign': 'var(--green)', 'likely_malware': 'var(--red)', 'suspicious': '#f0a500', 'unknown': 'var(--yellow)'}.get(_risk, 'var(--text)') %}
+          <div class="grid">
+            {% set promoted = result.get('promoted_sample') %}
+            {% if filename %}
+            <div class="kv">
+              <div class="k">Original file</div>
+              <div class="v mono break"{% if not promoted %} style="color:{{ _risk_color }}"{% endif %}>{{ filename }}</div>
+            </div>
+            {% endif %}
+            {% if promoted %}
+            <div class="kv">
+              <div class="k">Analyzed file</div>
+              <div class="v mono break" style="color:{{ _risk_color }}">{{ promoted.split('/')[-1] }} <span class="muted">(promoted from archive)</span></div>
+            </div>
+            {% endif %}
+            <div class="kv">
+              <div class="k">File type</div>
+              <div class="v mono break">{{ v.get('file_type','') }}</div>
+            </div>
+            <div class="kv">
+              <div class="k">SHA-256</div>
+              <div class="v mono break">
+                {% set sh = (p.get('sha256', {}) or {}).get('stdout','') %}
+                {{ (sh.split()[0] if sh else '') }}
+              </div>
+            </div>
+            <div class="kv">
+              <div class="k">Entropy</div>
+              <div class="v mono">{{ (p.get('entropy', {}) or {}).get('entropy','') }}</div>
+            </div>
+            {% if kind == 'pe' and p.get('upx_packed') is not none %}
+            <div class="kv">
+              <div class="k">UPX packed</div>
+              <div class="v mono">{% if p.get('upx_packed') %}<span class="badge high">yes</span>{% else %}<span class="badge low">no</span>{% endif %}</div>
+            </div>
+            {% endif %}
+            <div class="kv">
+              <div class="k">Heuristic score</div>
+              <div class="v mono">{{ h.get('score', 0) }}</div>
+            </div>
+          </div>
+        </div>
+        {% if result.get('byte_heatmap_b64') %}
+        <div style="flex-shrink:0;">
+          <div class="muted" style="font-size:11px;margin-bottom:4px;text-align:center;">Byte heatmap</div>
+          <img src="data:image/png;base64,{{ result['byte_heatmap_b64'] }}"
+               style="width:180px;height:180px;image-rendering:pixelated;border-radius:4px;display:block;"
+               title="Byte heatmap (256×256, viridis)">
+        </div>
+        {% endif %}
+      </div>
+
+      <h3>Top reasons</h3>
+      {% set reasons = v.get('top_reasons', []) %}
+      {% if reasons and reasons|length > 0 %}
+        <ul class="list">
+          {% for r in reasons %}
+            <li>{{ r }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="muted">No reasons returned.</div>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>Low-level static outputs</h2>
+        <div class="muted mono">{{ kind }}</div>
+      </div>
+
+      {% if kind == 'pe' %}
+        {{ show_block("Authenticode verify (osslsigncode)", p.get("authenticode_verify") or p.get("mandatory_authenticode_verify")) }}
+        {{ show_block("objdump -x (headers/sections)", p.get("objdump_pe_headers") or p.get("mandatory_objdump_pe_headers")) }}
+        {{ show_block("objdump -p (imports/dynamic)", p.get("objdump_pe_imports_dynamic") or p.get("mandatory_objdump_pe_dynamic")) }}
+        {{ show_block("radare2 quick info (iIj/iSj/iMj/aflj/ie)", p.get("radare2_quick_json") or p.get("mandatory_radare2_info")) }}
+        {{ show_block("radare2 entry disasm (pdf @ entry0)", p.get("radare2_entry_disasm") or p.get("mandatory_radare2_entry")) }}
+
+	{# --- Ghidra (experimental) --- #}
+	{% set gh = p.get("mandatory_ghidra_malhaus") or p.get("ghidra_malhaus") %}
+	{% if gh is not none %}
+  		{{ show_block("Ghidra Eduardo's Malhaus score", gh) }}
+	{% endif %}
+
+
+      {% elif kind == 'elf' %}
+        {{ show_block("readelf -a", p.get("readelf_all") or p.get("mandatory_readelf_all")) }}
+        {{ show_block("objdump -p (dynamic)", p.get("objdump_elf_dynamic") or p.get("mandatory_objdump_elf_dynamic")) }}
+        {{ show_block("ldd", p.get("ldd_deps") or p.get("mandatory_ldd_deps")) }}
+
+	{# --- Ghidra (experimental) --- #}
+	{% set gh = p.get("mandatory_ghidra_malhaus") or p.get("ghidra_malhaus") %}
+	{% if gh is not none %}
+  		{{ show_block("Ghidra Eduardo's Malhaus score", gh) }}
+	{% endif %}
+
+	{% elif kind == 'office' %}
+	  {{ show_block("oledump -i (streams)", p.get("oledump_list") or p.get("mandatory_oledump_list")) }}
+	  {{ show_block("olevba --json", p.get("olevba_json") or p.get("mandatory_olevba_json")) }}
+	  {{ show_block("oleobj extract", p.get("oleobj_extract") or p.get("mandatory_oleobj_extract")) }}
+	  {{ show_block("rtfobj extract", p.get("rtfobj_extract") or p.get("mandatory_rtfobj_extract")) }}
+	  {{ show_block("oledump Eduardo", p.get("oledump_details") or p.get("mandatory_oledump_details")) }}
+	{% elif kind == 'office_openxml' %}
+	  {{ show_block("zipinfo -1 (OpenXML contents)", p.get("openxml_list") or p.get("mandatory_openxml_list")) }}
+	  {{ show_block("unzip extract (OpenXML)", p.get("openxml_extract") or p.get("mandatory_openxml_extract")) }}
+
+
+
+      {% elif kind == 'lnk' %}
+        {{ show_block("LNK analysis", p.get("mandatory_lnk_analysis")) }}
+
+      {% elif kind == 'pdf' %}
+        {{ show_block("PDF keyword analysis", p.get("mandatory_pdf_analysis")) }}
+
+      {% elif kind == 'msi' %}
+        {% set msi = p.get("mandatory_msi_extract") or {} %}
+        {% if msi %}
+          <details>
+            <summary class="mono">MSI extract — files ({{ msi.get('extracted_files', []) | length }}{% if msi.get('pe_count') %}, {{ msi['pe_count'] }} PE(s){% endif %})</summary>
+            <div class="codebox"><pre class="mono break">{% for f in msi.get('extracted_files', []) %}{{ f.get('path','') }}  ({{ f.get('size',0) }} bytes)
+{% endfor %}</pre></div>
+          </details>
+          {% if msi.get('largest_pe') %}
+          <div class="muted" style="font-size:10px;margin:4px 0;">Largest PE: <span class="mono">{{ msi['largest_pe'] }}</span></div>
+          {% endif %}
+          {% if msi.get('pe_strings_preview') %}
+            <details>
+              <summary class="mono">MSI — PE strings preview</summary>
+              <div class="codebox"><pre class="mono break">{{ msi['pe_strings_preview'][:6000] }}</pre></div>
+            </details>
+          {% endif %}
+        {% else %}
+          <div class="muted">MSI extraction not available.</div>
+        {% endif %}
+
+      {% elif kind in ('vbs','hta','ps1','js','shell') %}
+        {% set sc = p.get("mandatory_script_content") %}
+        {% if sc %}
+          <details open>
+            <summary class="mono">Script content</summary>
+            <div class="codebox"><pre class="mono break">{{ sc[:12000] }}</pre></div>
+          </details>
+        {% else %}
+          <div class="muted">Script content not collected.</div>
+        {% endif %}
+
+      {% else %}
+        <div class="muted">No low-level tool outputs recorded for this file type.</div>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>Heuristic analysis</h2>
+        <span class="pill">risk hint <span class="mono">{{ h.get('risk_hint','') }}</span></span>
+      </div>
+      {% set hr = h.get('reasons', []) %}
+      {% if hr and hr|length > 0 %}
+        <ul class="list">
+          {% for r in hr %}
+            <li>{{ r }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="muted">—</div>
+      {% endif %}
+    </section>
+
+    {# ── Mathematical visualizations section ──────────────────────────────── #}
+    {% set viz = result.get('visualizations', {}) %}
+    {% set viz_mode = viz.get('file_mode', 'binary') %}
+    {% set viz_any = viz and (viz.get('entropy_profile',{}).get('ok') or viz.get('compression_curve',{}).get('ok') or viz.get('bigram_matrix',{}).get('ok') or viz.get('takens_embedding',{}).get('ok')) %}
+    {% if viz_any %}
+    <section class="card">
+      <div class="row">
+        <h2>Mathematical analysis{% if viz_mode == 'text' %} <span style="font-weight:400;font-size:14px;color:var(--muted);">— assuming text file</span>{% endif %}</h2>
+        <span class="pill mono muted" style="font-size:10px;">static byte-level · no execution required</span>
+      </div>
+
+      {# Row 1: Entropy profile (wide) + Compression curve (wide) #}
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px; max-width:900px;">
+
+        {% if viz.get('entropy_profile',{}).get('ok') %}
+        <div>
+          <div style="font-size:11px; font-weight:600; color:var(--text); margin-bottom:5px;">Entropy profile</div>
+          <div class="muted" style="font-size:10px; line-height:1.55; margin-bottom:6px;">
+            <a href="https://en.wikipedia.org/wiki/Entropy_(information_theory)" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Shannon entropy</a>
+            per 256-byte block across the file.
+            {% if viz_mode == 'text' %}
+            <span style="color:#2ad67c;">■</span> &lt;4 bits = repetitive/structured &nbsp;
+            <span style="color:#f0c64a;">■</span> 4–5.5 = normal script <em>(expected benign range)</em> &nbsp;
+            <span style="color:#ff4d4d;">■</span> ≥5.5 = obfuscated/encoded.<br>
+            <em>Interpreted files have natural entropy of 4–5 bits/byte. High-entropy spikes indicate base64 blobs or obfuscated payloads embedded in otherwise normal script.</em>
+            {% else %}
+            <span style="color:#2ad67c;">■</span> &lt;5 bits = structured code &nbsp;
+            <span style="color:#f0c64a;">■</span> 5–7 = compressed &nbsp;
+            <span style="color:#ff4d4d;">■</span> ≥7 = encrypted/packed.<br>
+            <em>Malware often shows long flat <span style="color:#ff4d4d;">red plateaus</span> (shellcode, dropped payloads). Benign code has varied, mostly green/yellow regions with visible section boundaries.</em>
+            {% endif %}<br>
+            <a href="https://ieeexplore.ieee.org/document/4140989" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Lyda &amp; Hamrock (2007), <em>IEEE Security &amp; Privacy</em> — entropy-based malware detection</a>
+          </div>
+          <img src="data:image/png;base64,{{ viz['entropy_profile']['b64'] }}"
+               style="width:100%; border-radius:4px; display:block;">
+          {% if viz['entropy_profile'].get('interpretation') %}
+          <div style="font-size:10px; line-height:1.6; margin-top:7px; color:var(--text); border-left:2px solid #30363d; padding-left:8px;">
+            {{ viz['entropy_profile']['interpretation'] }}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if viz.get('compression_curve',{}).get('skipped') %}
+        <div>
+          <div style="font-size:11px; font-weight:600; color:var(--text); margin-bottom:5px;">Compression curve</div>
+          <div class="muted" style="font-size:10px; line-height:1.55; padding:10px; border:1px solid #30363d; border-radius:4px;">
+            <em>Not applicable for interpreted/text files.</em> All plain text compresses well regardless of content — benign and malicious scripts are indistinguishable by compression ratio. Incompressibility is only meaningful as a signal for binary formats where encryption or packing raises entropy above the compressible range.
+          </div>
+        </div>
+        {% elif viz.get('compression_curve',{}).get('ok') %}
+        <div>
+          <div style="font-size:11px; font-weight:600; color:var(--text); margin-bottom:5px;">Compression curve</div>
+          <div class="muted" style="font-size:10px; line-height:1.55; margin-bottom:6px;">
+            <a href="https://en.wikipedia.org/wiki/Kolmogorov_complexity" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Kolmogorov complexity</a>
+            approximation: compressed size ÷ original size at each level (zlib / bz2 / lzma).<br>
+            Curves hugging the <span style="color:#ff4d4d;">red dashed line</span> (ratio ≥ 0.95) mean the file resists compression — a strong indicator of encryption or packing.<br>
+            <em>Benign executables drop steeply. Encrypted payloads stay flat near 1.0 regardless of algorithm or effort.</em><br>
+            <a href="https://arxiv.org/abs/cs/0312044" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Li et al. — normalized compression distance</a>
+          </div>
+          <img src="data:image/png;base64,{{ viz['compression_curve']['b64'] }}"
+               style="width:100%; border-radius:4px; display:block;">
+          {% if viz['compression_curve'].get('interpretation') %}
+          <div style="font-size:10px; line-height:1.6; margin-top:7px; color:var(--text); border-left:2px solid #30363d; padding-left:8px;">
+            {{ viz['compression_curve']['interpretation'] }}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+      </div>
+
+      {# Row 2: Bigram matrix (square) + Takens embedding (square) #}
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; max-width:900px;">
+
+        {% if viz.get('bigram_matrix',{}).get('ok') %}
+        <div>
+          <div style="font-size:11px; font-weight:600; color:var(--text); margin-bottom:5px;">{% if viz_mode == 'text' %}Character bigram matrix (ASCII){% else %}Byte bigram matrix{% endif %}</div>
+          <div class="muted" style="font-size:10px; line-height:1.55; margin-bottom:6px;">
+            {% if viz_mode == 'text' %}
+            95×95 <a href="https://en.wikipedia.org/wiki/Bigram" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">bigram</a>
+            heatmap restricted to printable ASCII (0x20–0x7E), log scale. Cell (i, j) = how often character <em>j</em> follows character <em>i</em> in the script's text.<br>
+            <em>Tight clusters at common syntax pairs (keywords, brackets, operators) indicate structured, readable code with no embedded payloads. A more spread or uniform fill does <strong>not</strong> by itself indicate malware — it may simply reflect varied syntax or a complex script. Look for entropy spikes in the profile above for stronger obfuscation signals.</em>
+            {% else %}
+            256×256 <a href="https://en.wikipedia.org/wiki/Bigram" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">bigram</a>
+            transition heatmap (log scale) — a <a href="https://en.wikipedia.org/wiki/Markov_chain" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">first-order Markov chain</a>
+            over the byte alphabet. Cell (i, j) = how often byte <em>j</em> follows byte <em>i</em>.<br>
+            <em>Benign PE/ELF shows a bright (0x00,0x00) cluster from null-byte padding, dense spots in the ASCII range from strings and import names, and isolated hot spots at common x86 opcode-pair transitions. Encrypted/random data produces a near-uniform bright grid.</em>
+            {% endif %}<br>
+            <a href="https://www.semanticscholar.org/paper/Visual-Reverse-Engineering-of-Binary-and-Data-Files-Conti-Dean/854055131cb3f029ccf2ea2f7ce8aa675d5d8f6e" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Conti &amp; Dean (2008), VizSEC — visual reverse engineering of binary files</a>
+          </div>
+          <img src="data:image/png;base64,{{ viz['bigram_matrix']['b64'] }}"
+               style="width:100%; border-radius:4px; display:block;">
+          {% if viz['bigram_matrix'].get('interpretation') %}
+          <div style="font-size:10px; line-height:1.6; margin-top:7px; color:var(--text); border-left:2px solid #30363d; padding-left:8px;">
+            {{ viz['bigram_matrix']['interpretation'] }}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if viz.get('takens_embedding',{}).get('ok') %}
+        <div>
+          <div style="font-size:11px; font-weight:600; color:var(--text); margin-bottom:5px;">{% if viz_mode == 'text' %}Character trigram point cloud — ASCII (ℝ³){% else %}Byte trigram point cloud (ℝ³ — drag to rotate){% endif %}</div>
+          <div class="muted" style="font-size:10px; line-height:1.55; margin-bottom:6px;">
+            {% if viz_mode == 'text' %}
+            Each character triple restricted to printable ASCII (0x20–0x7E) forms a point directly in ℝ³ (axes: b[i], b[i+1], b[i+2]). Colour encodes <strong>HDBSCAN density clusters</strong> (adapts to local density); grey points are noise. Drag to rotate, scroll to zoom.<br>
+            <em>Benign scripts cluster tightly around repeated syntax patterns (keywords, brackets, operators). Obfuscated or randomised scripts spread diffusely — near-isotropic scatter with few or no clusters.</em>
+            {% else %}
+            Each byte triple (b<sub>i</sub>, b<sub>i+1</sub>, b<sub>i+2</sub>) forms a point directly in ℝ³ — a trigram (3-gram) point cloud in raw byte space. Colour encodes <strong>HDBSCAN density clusters</strong> (adapts to local density — no fixed epsilon); grey points are noise. Drag to rotate, scroll to zoom.<br>
+            <em>Benign binaries produce tight, structured clusters (repeated instruction patterns). Encrypted/random data fills the cube as a diffuse isotropic cloud with no distinct clusters — all noise.</em>
+            {% endif %}<br>
+            Inspired by the delay-coordinate geometry of
+            <a href="https://en.wikipedia.org/wiki/Floris_Takens" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Floris Takens</a>
+            (professor at the <a href="https://www.rug.nl" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">University of Groningen</a>,
+            where Eduardo Duarte did his PhD), though strictly speaking
+            <a href="https://en.wikipedia.org/wiki/Takens%27s_theorem" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Takens' theorem</a>
+            applies to smooth dynamical systems — not byte sequences. The application to malware byte streams is an original idea from this project.<br>
+            <a href="https://dl.acm.org/doi/10.1145/2016904.2016908" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline dotted;">Nataraj et al. (2011), VizSEC — malware visualization via raw byte sequences</a>
+          </div>
+          {% if viz['takens_embedding'].get('points3d') %}
+          <canvas id="takens3d" style="width:100%; height:320px; border-radius:4px; display:block; cursor:grab;"></canvas>
+          <script>
+          (function(){
+            var pts = {{ viz['takens_embedding']['points3d'] | tojson }};
+            var canvas = document.getElementById('takens3d');
+            canvas.width  = canvas.offsetWidth  || 600;
+            canvas.height = canvas.offsetHeight || 320;
+            var gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (!gl) return;
+
+            var vsSrc = [
+              'attribute vec3 aPos;',
+              'attribute vec3 aCol;',
+              'uniform mat4 uMVP;',
+              'varying vec3 vCol;',
+              'void main(){',
+              '  gl_Position = uMVP * vec4(aPos,1.0);',
+              '  gl_PointSize = 3.0;',
+              '  vCol = aCol;',
+              '}'
+            ].join('\n');
+            var fsSrc = [
+              'precision mediump float;',
+              'varying vec3 vCol;',
+              'void main(){',
+              '  vec2 c = gl_PointCoord - 0.5;',
+              '  if(dot(c,c)>0.25) discard;',
+              '  gl_FragColor = vec4(vCol, 0.85);',
+              '}'
+            ].join('\n');
+
+            function mkShader(type, src) {
+              var s = gl.createShader(type);
+              gl.shaderSource(s, src); gl.compileShader(s); return s;
+            }
+            var prog = gl.createProgram();
+            gl.attachShader(prog, mkShader(gl.VERTEX_SHADER,   vsSrc));
+            gl.attachShader(prog, mkShader(gl.FRAGMENT_SHADER, fsSrc));
+            gl.linkProgram(prog); gl.useProgram(prog);
+
+            var n = pts.x.length;
+            var pos = new Float32Array(n * 3);
+            var col = new Float32Array(n * 3);
+            // pts.rgb carries pre-baked DBSCAN cluster colours [r,g,b] in [0,1]
+            for (var i = 0; i < n; i++) {
+              pos[i*3]   = pts.x[i] / 127.5 - 1.0;
+              pos[i*3+1] = pts.y[i] / 127.5 - 1.0;
+              pos[i*3+2] = pts.z[i] / 127.5 - 1.0;
+              var rgb = pts.rgb[i];
+              col[i*3]=rgb[0]; col[i*3+1]=rgb[1]; col[i*3+2]=rgb[2];
+            }
+
+            function mkBuf(data) {
+              var b = gl.createBuffer();
+              gl.bindBuffer(gl.ARRAY_BUFFER, b);
+              gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+              return b;
+            }
+            var posBuf = mkBuf(pos), colBuf = mkBuf(col);
+            var aPos = gl.getAttribLocation(prog, 'aPos');
+            var aCol = gl.getAttribLocation(prog, 'aCol');
+            var uMVP = gl.getUniformLocation(prog, 'uMVP');
+
+            function mul(a, b) {
+              var r = new Float32Array(16);
+              for (var i=0;i<4;i++) for (var j=0;j<4;j++) {
+                var s=0; for(var k=0;k<4;k++) s+=a[i+k*4]*b[k+j*4]; r[i+j*4]=s;
+              }
+              return r;
+            }
+            function Rx(a){var c=Math.cos(a),s=Math.sin(a);return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]);}
+            function Ry(a){var c=Math.cos(a),s=Math.sin(a);return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]);}
+            function persp(fov,asp,n,f){var t=1/Math.tan(fov/2),r=new Float32Array(16);r[0]=t/asp;r[5]=t;r[10]=(f+n)/(n-f);r[11]=-1;r[14]=2*f*n/(n-f);return r;}
+            function trans(z){var r=new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,z,1]);return r;}
+
+            var rotX=0.4, rotY=0.6, zoom=1.0;
+            var drag=false, lx=0, ly=0;
+
+            function draw() {
+              gl.viewport(0,0,canvas.width,canvas.height);
+              gl.clearColor(0x0d/255,0x11/255,0x18/255,1);
+              gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+              gl.enable(gl.DEPTH_TEST);
+              var mvp = mul(persp(Math.PI/3, canvas.width/canvas.height, 0.1, 100),
+                        mul(trans(-3.0/zoom), mul(Ry(rotY), Rx(rotX))));
+              gl.uniformMatrix4fv(uMVP, false, mvp);
+              gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+              gl.enableVertexAttribArray(aPos);
+              gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,0,0);
+              gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+              gl.enableVertexAttribArray(aCol);
+              gl.vertexAttribPointer(aCol,3,gl.FLOAT,false,0,0);
+              gl.drawArrays(gl.POINTS,0,n);
+            }
+
+            canvas.addEventListener('mousedown',function(e){drag=true;lx=e.clientX;ly=e.clientY;canvas.style.cursor='grabbing';e.preventDefault();});
+            window.addEventListener('mousemove',function(e){if(!drag)return;rotY+=(e.clientX-lx)*0.01;rotX+=(e.clientY-ly)*0.01;lx=e.clientX;ly=e.clientY;draw();});
+            window.addEventListener('mouseup',function(){drag=false;canvas.style.cursor='grab';});
+            canvas.addEventListener('wheel',function(e){zoom*=e.deltaY<0?1.1:0.9;zoom=Math.max(0.2,Math.min(5,zoom));draw();e.preventDefault();},{passive:false});
+
+            draw();
+          })();
+          </script>
+          {% else %}
+          <img src="data:image/png;base64,{{ viz['takens_embedding']['b64'] }}"
+               style="width:100%; border-radius:4px; display:block;">
+          {% endif %}
+          {% if viz['takens_embedding'].get('interpretation') %}
+          <div style="font-size:10px; line-height:1.6; margin-top:7px; color:var(--text); border-left:2px solid #30363d; padding-left:8px;">
+            {{ viz['takens_embedding']['interpretation'] }}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+      </div>
+    </section>
+    {% endif %}
+
+      {% if llm_debug %}<section class="card">
+    <div class="row">
+      <h2>LLM Debug</h2>
+      <div class="muted">{{ (result.get("llm_calls") or [])|length }} verdict call(s) · strings call shown separately</div>
+    </div>
+
+    {% set strings_llm = result.get("strings_llm") or {} %}
+    {% if strings_llm.get("_prompt_head") or strings_llm.get("_raw_output") %}
+    <details{% if strings_llm.get("error") %} open{% endif %}>
+      <summary class="mono">Strings LLM (pre-analysis pass){% if strings_llm.get("error") %} <span style="color:var(--red);">⚠ failed — no LLM response</span>{% endif %}</summary>
+      {% if strings_llm.get("error") %}
+      <div style="font-size:11px;color:var(--red);margin:6px 0 4px;">{{ strings_llm["error"] }}</div>
+      {% endif %}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px;">
+        <div>
+          <div class="muted" style="font-size:11px;margin-bottom:4px;">Prompt sent (what the LLM would have received)</div>
+          <pre class="llm-box">{{ strings_llm.get("_prompt_head","") }}</pre>
+        </div>
+        <div>
+          <div class="muted" style="font-size:11px;margin-bottom:4px;">Raw output</div>
+          <pre class="llm-box">{{ strings_llm.get("_raw_output","") }}</pre>
+        </div>
+      </div>
+    </details>
+    {% endif %}
+
+    {% set calls = result.get("llm_calls") or [] %}
+    {% if not calls %}
+      <div class="muted" style="margin-top:8px;">No verdict LLM calls recorded in this report.</div>
+    {% else %}
+      {% for c in calls %}
+        <details{% if c.get("failed") %} open{% endif %}>
+          <summary class="mono">
+            Verdict call #{{ loop.index }}{% if c.get("iteration") is not none %} (iteration {{ c["iteration"] }}){% endif %}
+            {% if c.get("failed") %}<span style="color:var(--red);"> ⚠ timeout/error — no LLM response</span>{% endif %}
+          </summary>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px;">
+            <div>
+              <div class="muted" style="font-size:11px;margin-bottom:4px;">{% if c.get("failed") %}Prompt sent (what the LLM would have received){% else %}Last prompt message sent{% endif %}</div>
+              <pre class="llm-box">{{ c.get("prompt","(not recorded — resubmit to capture)") }}</pre>
+            </div>
+            <div>
+              <div class="muted" style="font-size:11px;margin-bottom:4px;">Model output</div>
+              <pre class="llm-box{% if c.get("failed") %}" style="color:var(--red){% endif %}">{{ c.get("raw_output","") }}</pre>
+            </div>
+          </div>
+        </details>
+      {% endfor %}
+    {% endif %}
+  </section>{% endif %}
+
+
+
+    <footer class="footer">
+      <span class="mono muted">malhaus 2026</span>
+    </footer>
+  </div>
+</body>
+</html>
