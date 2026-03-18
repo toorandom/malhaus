@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/malhaus_logo_light.png" alt="malhaus" width="480"/>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/malhaus_logo_dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/malhaus_logo_light.png">
+    <img src="docs/malhaus_logo_light.png" alt="malhaus" width="480"/>
+  </picture>
 </p>
 
 Self-hosted **malware static triage platform** powered by LLMs.
