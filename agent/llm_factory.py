@@ -62,11 +62,17 @@ def get_llm(model: str) -> Any:
 
     if provider in ("azure", "azure_openai"):
         from langchain_openai import AzureChatOpenAI
-        kwargs = {"model": model, "temperature": 0.1, "timeout": timeout}
-        if api_key:
-            kwargs["api_key"] = api_key
+        kwargs = {"azure_deployment": model, "temperature": 0.1, "timeout": timeout}
         if endpoint:
             kwargs["azure_endpoint"] = endpoint
+        if config.AZURE_USE_ENTRA_ID:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+            credential = DefaultAzureCredential()
+            kwargs["azure_ad_token_provider"] = get_bearer_token_provider(
+                credential, "https://cognitiveservices.azure.com/.default"
+            )
+        elif api_key:
+            kwargs["api_key"] = api_key
         return AzureChatOpenAI(**kwargs)
 
     if provider == "deepseek":

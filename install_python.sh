@@ -23,6 +23,7 @@ pip install \
   requests \
   numpy matplotlib \
   scikit-learn \
-  captcha pillow
+  captcha pillow \
+  azure-identity
 
 echo "Python dependencies installed."

@@ -28,6 +28,12 @@ LLM_DEBUG_IN_REPORT = int(os.environ.get("MALHAUS_LLM_DEBUG_IN_REPORT", "0"))
 # Web UI captcha gate (set MALHAUS_CAPTCHA_ENABLED=0 to disable)
 CAPTCHA_ENABLED = os.environ.get("MALHAUS_CAPTCHA_ENABLED", "1") == "1"
 
+# Azure Entra ID (RBAC) authentication instead of API key.
+# When enabled, uses DefaultAzureCredential (Managed Identity, Service Principal,
+# Azure CLI, etc.). Set AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+# for service principal auth, or leave unset for Managed Identity on Azure VMs.
+AZURE_USE_ENTRA_ID = os.environ.get("MALHAUS_AZURE_USE_ENTRA_ID", "0") == "1"
+
 
 # NOTE:
 # - Webapp uses MAX_UPLOAD_* and MAX_PER_HOUR_PER_IP now.
