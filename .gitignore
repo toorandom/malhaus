@@ -2,8 +2,7 @@
 .env
 config.source
 
-# Runtime data
-maltriage.db
+# Runtime data (maltriage.db is committed as empty placeholder — do not ignore)
 uploads/
 logs/
 extracted/
