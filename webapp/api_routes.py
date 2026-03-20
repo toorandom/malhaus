@@ -212,28 +212,18 @@ def _build_result(job: dict, include: set[str]) -> dict:
     out: dict = {
         "status":      "done",
         "job_id":      job["job_id"],
-        "sha256":      sha256_val,
-        "report_url":      report_url,
-        "report_json_url": report_json_url,
         "verdict": {
             "risk_level": v.get("risk_level", "unknown"),
             "confidence":  v.get("confidence", 0),
             "file_type":   v.get("file_type", ""),
         },
-        "heuristic_score": h.get("score", 0),
         "top_reasons":  v.get("top_reasons", []),
-        "summary": {
-            "risk_level":       v.get("risk_level", "unknown"),
-            "confidence":       v.get("confidence", 0),
-            "file_type":        v.get("file_type", ""),
-            "sha256":           sha256_val,
-            "report_url":       report_url,
-            "report_json_url":  report_json_url,
-            "heuristic_score":  h.get("score", 0),
-            "top_reasons":      v.get("top_reasons", []),
-            "strings_score":    sl.get("strings_score", 0),
-            "strings_summary":  sl.get("summary", ""),
-        },
+        "heuristic_score": h.get("score", 0),
+        "strings_score":   sl.get("strings_score", 0),
+        "strings_summary": sl.get("summary", ""),
+        "sha256":      sha256_val,
+        "report_url":      report_url,
+        "report_json_url": report_json_url,
         "tools_used":   tools_used,
         "tool_outputs": tool_outputs,
         "html_summary": _build_html_summary(
@@ -249,6 +239,7 @@ def _build_result(job: dict, include: set[str]) -> dict:
             strings_summary=sl.get("summary", ""),
         ),
     }
+
 
     # --- optional: images ---
     if "images" in include:

@@ -2,10 +2,18 @@
 # ---------------------------------------------------------------------------
 # REST API — analyze a remote file by URL
 #
+# Usage:
+#   ./rest_analyze_url.sh <https://example.com/file.exe>
+#
 # The server downloads the file itself. Nothing is uploaded from this machine.
 #
-# TIP: If your server uses a self-signed TLS certificate, add -k to the
-# curl commands below to skip certificate verification.
+# Environment variables:
+#   MALTRIAGE_HOST   — base URL of your malhaus instance (default: https://your-domain.com)
+#   MALTRIAGE_TOKEN  — your mh_... API key
+#
+# IMPORTANT: If your server uses a self-signed TLS certificate, add -k to
+# every curl command below to skip certificate verification, e.g.:
+#   curl -sk ...   instead of   curl -s ...
 # ---------------------------------------------------------------------------
 
 HOST="${MALTRIAGE_HOST:-https://your-domain.com}"
@@ -21,11 +29,10 @@ SUBMIT=$(curl -s -X POST "$HOST/api/v1/analyze" \
   -H "Content-Type: application/json" \
   -d "{\"url\": \"$URL\"}")
 
-echo "Response: $SUBMIT"
-
 JOB_ID=$(echo "$SUBMIT" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])" 2>/dev/null)
 if [ -z "$JOB_ID" ]; then
-  echo "Error: could not get job_id from response" >&2
+  echo "Error: could not get job_id. Server response:" >&2
+  echo "$SUBMIT" >&2
   exit 1
 fi
 echo "Job ID: $JOB_ID"
@@ -45,20 +52,13 @@ while true; do
   sleep "$POLL_INTERVAL"
 done
 
-# ── 3. Print result ──────────────────────────────────────────────────────────
+# ── 3. Print result as JSON ──────────────────────────────────────────────────
 echo ""
 echo "$RESP" | python3 -c "
 import sys, json
 r = json.load(sys.stdin)
 if r['status'] == 'failed':
-    print('FAILED:', r.get('error'))
+    print(json.dumps({'status': 'failed', 'error': r.get('error')}, indent=2))
     sys.exit(1)
-v = r['verdict']
-print(f\"Risk     : {v['risk_level']} (confidence {v['confidence']}%)\")
-print(f\"SHA-256  : {r['sha256']}\")
-print(f\"Report   : $HOST{r['report_url']}\")
-print()
-print('Top reasons:')
-for reason in r.get('top_reasons', []):
-    print(f'  - {reason}')
+print(json.dumps(r, indent=2))
 "
