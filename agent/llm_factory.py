@@ -54,10 +54,15 @@ def get_llm(model: str) -> Any:
     if provider == "openai":
         from langchain_openai import ChatOpenAI
         kwargs = {"model": model, "temperature": 0.1, "timeout": timeout}
-        if api_key:
-            kwargs["api_key"] = api_key
         if endpoint:
             kwargs["base_url"] = endpoint
+        if config.AZURE_USE_ENTRA_ID:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+            kwargs["api_key"] = get_bearer_token_provider(
+                DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+            )
+        elif api_key:
+            kwargs["api_key"] = api_key
         return ChatOpenAI(**kwargs)
 
     if provider in ("azure", "azure_openai"):
