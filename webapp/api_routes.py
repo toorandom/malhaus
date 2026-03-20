@@ -253,7 +253,7 @@ def api_upload():
         resp.status_code = 401
         return resp
 
-    body             = request.json or {}
+    body             = request.get_json(silent=True) or {}
     archive_password = (request.form.get("archive_password") or body.get("archive_password") or "").strip()
 
     # ── Resolve file content ─────────────────────────────────────────────────
@@ -350,7 +350,7 @@ def api_analyze():
         )
 
     # --- input: sha256, file, file_b64, file_id, or url ---
-    body     = request.json or {}
+    body     = request.get_json(silent=True) or {}
     sha256_lookup = (request.form.get("sha256") or body.get("sha256") or "").strip().lower()
     url      = (request.form.get("url")      or body.get("url")      or "").strip()
     file_id  = (request.form.get("file_id")  or body.get("file_id")  or "").strip()

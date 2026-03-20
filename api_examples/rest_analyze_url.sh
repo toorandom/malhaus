@@ -3,6 +3,9 @@
 # REST API — analyze a remote file by URL
 #
 # The server downloads the file itself. Nothing is uploaded from this machine.
+#
+# TIP: If your server uses a self-signed TLS certificate, add -k to the
+# curl commands below to skip certificate verification.
 # ---------------------------------------------------------------------------
 
 HOST="${MALTRIAGE_HOST:-https://your-domain.com}"

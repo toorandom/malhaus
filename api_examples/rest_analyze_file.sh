@@ -3,6 +3,9 @@
 # REST API — analyze a local file (direct multipart upload)
 #
 # The file is sent in a single POST request. No pre-upload step needed.
+#
+# TIP: If your server uses a self-signed TLS certificate, add -k to the
+# curl commands below to skip certificate verification.
 # ---------------------------------------------------------------------------
 
 HOST="${MALTRIAGE_HOST:-https://your-domain.com}"
