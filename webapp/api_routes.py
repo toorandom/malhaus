@@ -174,12 +174,18 @@ def _build_result(job: dict, include: set[str]) -> dict:
             }
     tools_used = list(tool_outputs.keys())
 
+    sha256_val   = job["sha256"] or ""
+    report_url   = url_for("bp.report_sha", sha256=sha256_val, _external=False) if sha256_val else None
+    report_json_url = url_for("bp.report_sha_json", sha256=sha256_val, _external=False) if sha256_val else None
+
+    sl = report.get("strings_llm", {}) or {}
+
     out: dict = {
         "status":      "done",
         "job_id":      job["job_id"],
-        "sha256":      job["sha256"] or "",
-        "report_url":  url_for("bp.report_sha", sha256=job["sha256"], _external=False)
-                       if job.get("sha256") else None,
+        "sha256":      sha256_val,
+        "report_url":      report_url,
+        "report_json_url": report_json_url,
         "verdict": {
             "risk_level": v.get("risk_level", "unknown"),
             "confidence":  v.get("confidence", 0),
@@ -187,6 +193,18 @@ def _build_result(job: dict, include: set[str]) -> dict:
         },
         "heuristic_score": h.get("score", 0),
         "top_reasons":  v.get("top_reasons", []),
+        "summary": {
+            "risk_level":       v.get("risk_level", "unknown"),
+            "confidence":       v.get("confidence", 0),
+            "file_type":        v.get("file_type", ""),
+            "sha256":           sha256_val,
+            "report_url":       report_url,
+            "report_json_url":  report_json_url,
+            "heuristic_score":  h.get("score", 0),
+            "top_reasons":      v.get("top_reasons", []),
+            "strings_score":    sl.get("strings_score", 0),
+            "strings_summary":  sl.get("summary", ""),
+        },
         "tools_used":   tools_used,
         "tool_outputs": tool_outputs,
     }
