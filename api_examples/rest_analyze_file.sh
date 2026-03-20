@@ -44,22 +44,14 @@ while true; do
   sleep "$POLL_INTERVAL"
 done
 
-# ── 3. Print result ──────────────────────────────────────────────────────────
+# ── 3. Print result as JSON ──────────────────────────────────────────────────
 echo ""
 echo "$RESP" | python3 -c "
 import sys, json
 r = json.load(sys.stdin)
 if r['status'] == 'failed':
-    print('FAILED:', r.get('error'))
+    print(json.dumps({'status': 'failed', 'error': r.get('error')}, indent=2))
     sys.exit(1)
-s = r.get('summary', {})
-print(f\"Risk     : {s.get('risk_level','?')} (confidence {s.get('confidence','?')}%)\")
-print(f\"SHA-256  : {s.get('sha256','?')}\")
-print(f\"Report   : $HOST{s.get('report_url','')}\")
-print(f\"JSON     : $HOST{s.get('report_json_url','')}\")
-print(f\"Strings  : {s.get('strings_score','?')}/100 — {s.get('strings_summary','')}\")
-print()
-print('Top reasons:')
-for reason in s.get('top_reasons', []):
-    print(f'  - {reason}')
+# Print the full structured response as pretty JSON (html_summary included)
+print(json.dumps(r, indent=2))
 "

@@ -150,6 +150,35 @@ def _job_get(job_id: str) -> dict | None:
 # Result formatting
 # ---------------------------------------------------------------------------
 
+def _build_html_summary(
+    risk_level, confidence, file_type, sha256, report_url, report_json_url,
+    heuristic_score, top_reasons, strings_score, strings_summary,
+) -> str:
+    risk_color = {
+        "malicious": "#c0392b", "suspicious": "#e67e22",
+        "benign": "#27ae60", "unknown": "#7f8c8d",
+    }.get(str(risk_level).lower(), "#7f8c8d")
+    reasons_html = "".join(f"<li>{r}</li>" for r in top_reasons)
+    return (
+        f'<div style="font-family:monospace;font-size:13px;line-height:1.6">'
+        f'<p><strong>Risk:</strong> '
+        f'<span style="color:{risk_color};font-weight:bold">{risk_level}</span>'
+        f' &nbsp; <strong>Confidence:</strong> {confidence}%'
+        f' &nbsp; <strong>Heuristic score:</strong> {heuristic_score}'
+        f' &nbsp; <strong>Strings score:</strong> {strings_score}/100</p>'
+        f'<p><strong>File type:</strong> {file_type}</p>'
+        f'<p><strong>SHA-256:</strong> <code>{sha256}</code></p>'
+        f'<p>'
+        f'<a href="{report_url}">HTML report</a>'
+        f' &nbsp;|&nbsp; '
+        f'<a href="{report_json_url}">Full JSON</a>'
+        f'</p>'
+        f'<p><strong>Strings summary:</strong> {strings_summary}</p>'
+        f'<strong>Top reasons:</strong><ul>{reasons_html}</ul>'
+        f'</div>'
+    )
+
+
 def _build_result(job: dict, include: set[str]) -> dict:
     """
     Build the structured API response from a completed job row.
@@ -207,6 +236,18 @@ def _build_result(job: dict, include: set[str]) -> dict:
         },
         "tools_used":   tools_used,
         "tool_outputs": tool_outputs,
+        "html_summary": _build_html_summary(
+            risk_level=v.get("risk_level", "unknown"),
+            confidence=v.get("confidence", 0),
+            file_type=v.get("file_type", ""),
+            sha256=sha256_val,
+            report_url=report_url,
+            report_json_url=report_json_url,
+            heuristic_score=h.get("score", 0),
+            top_reasons=v.get("top_reasons", []),
+            strings_score=sl.get("strings_score", 0),
+            strings_summary=sl.get("summary", ""),
+        ),
     }
 
     # --- optional: images ---
