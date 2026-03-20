@@ -59,11 +59,12 @@ RUN mkdir -p uploads logs extracted
 
 EXPOSE 8000
 
-CMD [".venv/bin/gunicorn", \
-     "--workers", "2", \
-     "--bind", "0.0.0.0:8000", \
-     "--timeout", "1800", \
-     "--capture-output", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "webapp.app:create_app()"]
+# touch maltriage.db so Docker bind-mount creates a file not a directory on the host
+CMD ["sh", "-c", "touch /app/maltriage.db && exec .venv/bin/gunicorn \
+     --workers 2 \
+     --bind 0.0.0.0:8000 \
+     --timeout 1800 \
+     --capture-output \
+     --access-logfile - \
+     --error-logfile - \
+     'webapp.app:create_app()'"]
