@@ -52,12 +52,14 @@ r = json.load(sys.stdin)
 if r['status'] == 'failed':
     print('FAILED:', r.get('error'))
     sys.exit(1)
-v = r['verdict']
-print(f\"Risk     : {v['risk_level']} (confidence {v['confidence']}%)\")
-print(f\"SHA-256  : {r['sha256']}\")
-print(f\"Report   : $HOST{r['report_url']}\")
+s = r.get('summary', {})
+print(f\"Risk     : {s.get('risk_level','?')} (confidence {s.get('confidence','?')}%)\")
+print(f\"SHA-256  : {s.get('sha256','?')}\")
+print(f\"Report   : $HOST{s.get('report_url','')}\")
+print(f\"JSON     : $HOST{s.get('report_json_url','')}\")
+print(f\"Strings  : {s.get('strings_score','?')}/100 — {s.get('strings_summary','')}\")
 print()
 print('Top reasons:')
-for reason in r.get('top_reasons', []):
+for reason in s.get('top_reasons', []):
     print(f'  - {reason}')
 "
