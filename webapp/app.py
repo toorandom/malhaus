@@ -71,6 +71,8 @@ def create_app():
 
     # max upload size enforced by Flask
     app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
+    # Preserve insertion order in JSON responses (don't sort keys alphabetically)
+    app.config["JSON_SORT_KEYS"] = False
 
     # Session cookie security
     # NOTE: set MALHAUS_HTTPS=1 in config.source once you have TLS in front
