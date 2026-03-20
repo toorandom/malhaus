@@ -56,16 +56,28 @@ cp .env.example .env
 # 4. Point nginx at your domain
 sed -i 's/your-domain.com/yourdomain.com/g' nginx/nginx.conf
 
-# 5. Get a TLS certificate
+# 5a. Get a TLS certificate — public domain (Let's Encrypt)
 sudo apt install -y certbot
 sudo certbot certonly --standalone -d yourdomain.com
+
+# 5b. OR — self-signed certificate for internal/air-gapped deployments
+#     (browser will warn; add the cert to your internal CA trust store to silence it)
+mkdir -p certs
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+  -keyout certs/privkey.pem -out certs/fullchain.pem \
+  -subj "/CN=malhaus" \
+  -addext "subjectAltName=IP:$(hostname -I | awk '{print $1}'),DNS:malhaus.internal"
+# Then update nginx/nginx.conf to point to ./certs/ instead of /etc/letsencrypt/live/...
+sed -i 's|/etc/letsencrypt/live/your-domain.com|/etc/nginx/certs|g' nginx/nginx.conf
+# And mount the certs dir in docker-compose.yml:
+# - ./certs:/etc/nginx/certs:ro
 
 # 6. Build and start
 docker compose up -d --build
 docker compose logs -f
 ```
 
-The app is now reachable at `https://yourdomain.com`.
+The app is now reachable at `https://yourdomain.com` (or `https://<server-ip>` for self-signed).
 
 See [START.md](START.md) for the full deployment guide including updates, backups, moving to another machine, and troubleshooting.
 
