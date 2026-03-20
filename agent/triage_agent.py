@@ -234,4 +234,8 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "byte_heatmap_b64": heatmap.get("b64") if heatmap.get("ok") else None,
         "visualizations": visualizations,
         "analysis_seconds": round(time.time() - _t0, 1),
+        "llm_provider":  config.LLM_PROVIDER or "gemini",
+        "model_strings": MODEL_STRINGS,
+        "model_verdict": MODEL_VERDICT,
+        "llm_endpoint":  config.LLM_ENDPOINT or "",
     }

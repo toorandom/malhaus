@@ -467,6 +467,13 @@
       <h2>LLM Debug</h2>
       <div class="muted">{{ (result.get("llm_calls") or [])|length }} verdict call(s) · strings call shown separately</div>
     </div>
+    <div class="muted" style="font-size:11px;margin-top:4px;">
+      Provider: <span class="mono">{{ result.get("llm_provider","?") }}</span>
+      &nbsp;·&nbsp; Strings model: <span class="mono">{{ result.get("model_strings","?") }}</span>
+      &nbsp;·&nbsp; Verdict model: <span class="mono">{{ result.get("model_verdict","?") }}</span>
+      {% if result.get("llm_endpoint") %}&nbsp;·&nbsp; Endpoint: <span class="mono">{{ result.get("llm_endpoint") }}</span>{% endif %}
+    </div>
+    </div>
 
     {% set strings_llm = result.get("strings_llm") or {} %}
     {% if strings_llm.get("_prompt_head") or strings_llm.get("_raw_output") %}
