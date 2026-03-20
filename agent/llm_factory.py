@@ -95,7 +95,16 @@ def get_llm(model: str) -> Any:
     if provider in ("claude", "anthropic"):
         from langchain_anthropic import ChatAnthropic
         kwargs = {"model": model, "temperature": 0.1, "timeout": timeout}
-        if api_key:
+        if endpoint:
+            kwargs["base_url"] = endpoint
+        if config.AZURE_USE_ENTRA_ID:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+            token_provider = get_bearer_token_provider(
+                DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+            )
+            # Token is fetched fresh per analysis call (get_llm is called per analysis)
+            kwargs["anthropic_auth_token"] = token_provider()
+        elif api_key:
             kwargs["anthropic_api_key"] = api_key
         return ChatAnthropic(**kwargs)
 
