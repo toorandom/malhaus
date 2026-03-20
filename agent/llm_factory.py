@@ -102,8 +102,9 @@ def get_llm(model: str) -> Any:
             token_provider = get_bearer_token_provider(
                 DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
             )
-            # Token is fetched fresh per analysis call (get_llm is called per analysis)
-            kwargs["anthropic_auth_token"] = token_provider()
+            # Inject bearer token via default_headers; dummy api_key satisfies client validation
+            kwargs["default_headers"] = {"Authorization": f"Bearer {token_provider()}"}
+            kwargs["anthropic_api_key"] = "azure-entra-id"
         elif api_key:
             kwargs["anthropic_api_key"] = api_key
         return ChatAnthropic(**kwargs)
