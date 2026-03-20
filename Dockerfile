@@ -19,10 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libimage-exiftool-perl \
     osslsigncode \
     firejail \
-  && apt-get install -y --no-install-recommends pev || true \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g js-beautify --quiet
+# Best-effort optional packages (pev not in all mirrors; js-beautify needs npm)
+RUN apt-get update && apt-get install -y --no-install-recommends pev; \
+    rm -rf /var/lib/apt/lists/* ; true
+RUN npm install -g js-beautify --quiet || true
 
 # ── Python venv ───────────────────────────────────────────────────────────────
 WORKDIR /app
