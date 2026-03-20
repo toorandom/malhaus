@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip \
     build-essential \
     file binutils \
-    yara ssdeep radare2 \
+    yara ssdeep \
     zip unzip curl git \
     jq \
     elfutils \
@@ -21,7 +21,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     firejail \
   && rm -rf /var/lib/apt/lists/*
 
-# Best-effort optional packages (pev not in all mirrors; js-beautify needs npm)
+# radare2 — try apt first, fall back to official .deb from GitHub
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends radare2 \
+  && rm -rf /var/lib/apt/lists/* \
+  || ( rm -rf /var/lib/apt/lists/* \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/radareorg/radare2/releases/download/5.9.8/radare2_5.9.8_${ARCH}.deb" -o /tmp/r2.deb \
+    && dpkg -i /tmp/r2.deb \
+    && rm /tmp/r2.deb \
+    || true )
+
+# Best-effort optional packages
 RUN apt-get update && apt-get install -y --no-install-recommends pev; \
     rm -rf /var/lib/apt/lists/* ; true
 RUN npm install -g js-beautify --quiet || true
