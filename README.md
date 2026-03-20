@@ -62,15 +62,20 @@ sudo certbot certonly --standalone -d yourdomain.com
 
 # 5b. OR — self-signed certificate for internal/air-gapped deployments
 #     (browser will warn; add the cert to your internal CA trust store to silence it)
+
+# Generate the certificate (valid 10 years, includes server IP and optional DNS name)
 mkdir -p certs
 openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
   -keyout certs/privkey.pem -out certs/fullchain.pem \
   -subj "/CN=malhaus" \
   -addext "subjectAltName=IP:$(hostname -I | awk '{print $1}'),DNS:malhaus.internal"
-# Then update nginx/nginx.conf to point to ./certs/ instead of /etc/letsencrypt/live/...
-sed -i 's|/etc/letsencrypt/live/your-domain.com|/etc/nginx/certs|g' nginx/nginx.conf
-# And mount the certs dir in docker-compose.yml:
-# - ./certs:/etc/nginx/certs:ro
+
+# Point nginx to the self-signed certs instead of Let's Encrypt paths
+sed -i 's|ssl_certificate .*|ssl_certificate     /etc/nginx/certs/fullchain.pem;|' nginx/nginx.conf
+sed -i 's|ssl_certificate_key .*|ssl_certificate_key /etc/nginx/certs/privkey.pem;|' nginx/nginx.conf
+
+# Mount the certs folder into the nginx container (replace the letsencrypt mount)
+sed -i 's|- /etc/letsencrypt:/etc/letsencrypt:ro|- ./certs:/etc/nginx/certs:ro|' docker-compose.yml
 
 # 6. Build and start
 docker compose up -d --build
