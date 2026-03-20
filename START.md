@@ -103,11 +103,16 @@ docker compose logs -f
 
 The app is now reachable at `https://your-domain.com`.
 
+> **Note:** `run.sh` and `config.source` are for the bare-metal installation only. If you are using Docker, do not use `run.sh` — the container manages everything. Use the `docker compose` commands below.
+
 ---
 
-## Day-to-day operations
+## Day-to-day operations (Docker)
 
 ```bash
+# start in the background (normal day-to-day)
+docker compose up -d
+
 # stop everything
 docker compose down
 
@@ -124,6 +129,8 @@ docker compose logs -f nginx
 # open a shell inside the running container
 docker compose exec malhaus bash
 ```
+
+The containers are configured with `restart: unless-stopped` — they come back automatically after a server reboot.
 
 ---
 
