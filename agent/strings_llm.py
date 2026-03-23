@@ -197,7 +197,14 @@ Strings preview:
     for _attempt in range(3):
         # Fresh client on every attempt — ensures a new HTTP connection rather
         # than reusing a stalled socket from a previous timed-out request.
-        llm = get_llm(model)
+        try:
+            llm = get_llm(model)
+        except Exception as _e:
+            return {"error": f"strings_llm_init_error: {type(_e).__name__}: {_e}",
+                    "strings_score": 0, "strings_risk_level": "unknown",
+                    "strings_confidence": 0, "summary": "", "evidence": [], "iocs": {},
+                    "_prompt_head": prompt[:30000],
+                    "_raw_output": f"LLM client init failed: {_e}"}
 
         _t0 = _time.time()
 

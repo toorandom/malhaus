@@ -156,14 +156,20 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
             _t = _s2(_key)
             if _t:
                 strings_input += "\n" + _t[:3000]
-    strings_llm = analyze_strings_llm(
-        model=MODEL_STRINGS,
-        kind=kind,
-        file_entropy=(pre.get("entropy") or {}).get("entropy"),
-        strings_preview=strings_input,
-        max_chars=20000,
-        progress_cb=cb,
-    )
+    try:
+        strings_llm = analyze_strings_llm(
+            model=MODEL_STRINGS,
+            kind=kind,
+            file_entropy=(pre.get("entropy") or {}).get("entropy"),
+            strings_preview=strings_input,
+            max_chars=20000,
+            progress_cb=cb,
+        )
+    except Exception as _e:
+        strings_llm = {"error": f"strings_llm_crashed: {type(_e).__name__}: {_e}",
+                       "strings_score": 0, "strings_risk_level": "unknown",
+                       "strings_confidence": 0, "summary": "", "evidence": [], "iocs": {},
+                       "_prompt_head": "", "_raw_output": str(_e)}
 
     cb("Building evidence pack")
     evidence_pack = build_evidence_pack(pre, options=options or {})
