@@ -24,6 +24,7 @@ FILE="${1:?Usage: $0 <path/to/file> [archive_password]}"
 ARCHIVE_PASSWORD="${2:-}"
 POLL_INTERVAL=5
 
+
 # ── 1. Submit ────────────────────────────────────────────────────────────────
 echo "Submitting: $FILE"
 

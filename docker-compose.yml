@@ -8,6 +8,9 @@ services:
       - ./maltriage.db:/app/maltriage.db
       - ./uploads:/app/uploads
       - ./logs:/app/logs
+      # Ghidra (optional) — mount your Ghidra install from the host.
+      # Set MALHAUS_GHIDRA_DIR=/opt/ghidra and JAVA_HOME in .env to enable.
+      - /opt/ghidra:/opt/ghidra:ro
     expose:
       - "8000"
     # firejail needs these capabilities inside the container

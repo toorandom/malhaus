@@ -35,6 +35,12 @@ RUN apt-get update \
 # Best-effort optional packages
 RUN apt-get update && apt-get install -y --no-install-recommends pev; \
     rm -rf /var/lib/apt/lists/* ; true
+
+# JDK 21 — required by Ghidra (optional; skip if not needed)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+  && rm -rf /var/lib/apt/lists/* \
+  || ( rm -rf /var/lib/apt/lists/* ; true )
 RUN npm install -g js-beautify --quiet || true
 
 # ── Python venv ───────────────────────────────────────────────────────────────
