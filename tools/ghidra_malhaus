@@ -409,7 +409,14 @@ JAVA
   -librarySearchPaths "$EMPTY_DLL_DIR" \
   -scriptPath "$SCRIPT_DIR" \
   -analysisTimeoutPerFile "$TIMEOUT" \
-  -postScript "$SCRIPT_NAME" "$OUTFILE" >"$LOGFILE" 2>&1
+  -postScript "$SCRIPT_NAME" "$OUTFILE" >"$LOGFILE" 2>&1 \
+  || { echo "[!] analyzeHeadless failed (rc=$?); ghidra log:" >&2; cat "$LOGFILE" >&2; exit 1; }
 
 # Print the report to stdout (this is what your agent tool should capture)
-cat "$OUTFILE"
+if [[ -s "$OUTFILE" ]]; then
+  cat "$OUTFILE"
+else
+  echo "[!] Ghidra ran but output file is empty. Log:" >&2
+  cat "$LOGFILE" >&2
+  exit 1
+fi
