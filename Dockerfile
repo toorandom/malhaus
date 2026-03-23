@@ -37,9 +37,12 @@ RUN apt-get update \
 RUN apt-get update && apt-get install -y --no-install-recommends pev; \
     rm -rf /var/lib/apt/lists/* ; true
 
-# JDK 21 — required by Ghidra (optional; skip if not needed)
+# JDK — required by Ghidra (optional; skip if not needed)
+# Debian bookworm ships openjdk-17; that covers Ghidra 10.x.
+# For Ghidra 11+ (needs Java 21) install temurin-21 on the host and
+# mount it in, or add the Eclipse Adoptium repo here.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+  && apt-get install -y --no-install-recommends default-jdk-headless \
   && rm -rf /var/lib/apt/lists/* \
   || ( rm -rf /var/lib/apt/lists/* ; true )
 RUN npm install -g js-beautify --quiet || true
