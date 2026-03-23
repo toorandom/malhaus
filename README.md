@@ -120,6 +120,46 @@ See `.env.example` for full configuration examples.
 
 ---
 
+## Ghidra integration (optional)
+
+Ghidra headless decompilation adds a deeper static analysis pass for PE and ELF files — it decompiles functions, scores suspicious API combinations, and extracts embedded indicators (IPs, URLs, registry keys).
+
+**Requires:** Ghidra 11+ installed on the **host** machine.
+
+### Docker
+
+1. Install Ghidra on the host (e.g. `/opt/ghidra`). Java 21 is already baked into the image.
+2. The `docker-compose.yml` mounts `/opt/ghidra` from the host into the container automatically.
+3. Add to `.env`:
+   ```
+   MALHAUS_GHIDRA_DIR=/opt/ghidra
+   ```
+4. Rebuild: `docker compose up -d --build`
+
+### Bare metal
+
+1. Install Ghidra and Java 21 (`sudo apt install openjdk-21-jdk-headless` on Ubuntu 24.04+).
+2. Add to `config.source`:
+   ```
+   export MALHAUS_GHIDRA_DIR=/opt/ghidra
+   export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+   ```
+
+### Enabling per analysis
+
+- **Web UI:** check the **Use Ghidra** checkbox before submitting.
+- **REST API:** pass `use_ghidra=1` as a form field:
+  ```bash
+  curl -X POST https://your-server/api/v1/upload \
+    -H "X-API-Key: YOUR_KEY" \
+    -F "file=@sample.exe" \
+    -F "use_ghidra=1"
+  ```
+
+Ghidra analysis typically takes 1–3 minutes per file.
+
+---
+
 ## API & MCP
 
 All API responses are **JSON**. Submitting a file returns a `job_id` immediately; you poll `GET /api/v1/jobs/<job_id>` until done:
