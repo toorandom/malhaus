@@ -103,6 +103,53 @@ nano config.source             # set MALHAUS_LLM_PROVIDER, MALHAUS_LLM_API_KEY, 
 
 ---
 
+## Analysis tools
+
+The pipeline runs a combination of system tools (installed via apt) and Python libraries (installed via pip). All tools run automatically in preflight; the LLM can call supplementary tools on demand.
+
+### System tools (apt)
+
+| Tool | Purpose | File types |
+|------|---------|------------|
+| `strings` / `file` / `binutils` | String extraction, file type detection, objdump | All |
+| `radare2` | Disassembly, entry point analysis, PE/ELF info | PE, ELF |
+| `yara` | YARA rule matching | All |
+| `ssdeep` | Fuzzy hashing | All |
+| `elfutils` | ELF analysis (`readelf`) | ELF |
+| `pev` / `osslsigncode` | PE section info, Authenticode verification | PE |
+| `binwalk` | Embedded file carving | All |
+| `exiftool` | Metadata extraction | All |
+| `p7zip` | Archive extraction | ZIP, 7z, RAR… |
+| `firejail` | Sandbox wrapper for CLI tools | All |
+| `nodejs` / `js-beautify` | JavaScript deobfuscation | JS |
+| `openjdk-21` *(Docker)* | Required by Ghidra headless | PE, ELF |
+
+### Python libraries (pip)
+
+| Library | Purpose | File types |
+|---------|---------|------------|
+| `oletools` (oledump, olevba, oleobj, rtfobj) | OLE/VBA macro analysis, object extraction | Office, RTF |
+| `flare-floss` | Deobfuscated string extraction (stack strings, encoded strings) | PE, ELF |
+| `pefile` | PE header/section/import parsing | PE |
+| `dnfile` | .NET metadata analysis — type refs, Assembly.Load, embedded resources, obfuscation | .NET PE |
+| `yara-python` | YARA rule engine | All |
+| `ssdeep` | Fuzzy hash computation | All |
+| `python-magic` | File type detection | All |
+
+### Didier Stevens tools (downloaded at build time)
+
+| Tool | Purpose | File types |
+|------|---------|------------|
+| `oledump.py` | OLE stream analysis | Office |
+| `pdfid.py` | PDF structure analysis | PDF |
+| `pdf-parser.py` | PDF object extraction | PDF |
+
+### Optional: Ghidra headless (requires manual install)
+
+Ghidra decompiles functions, scores suspicious API combinations (injection, persistence, C2 indicators), and extracts IOCs from binary code. See [Ghidra integration](#ghidra-integration-optional) below.
+
+---
+
 ## LLM providers
 
 Set `MALHAUS_LLM_PROVIDER` in `.env` (Docker) or `config.source` (bare metal):
@@ -111,12 +158,13 @@ Set `MALHAUS_LLM_PROVIDER` in `.env` (Docker) or `config.source` (bare metal):
 |----------|-------|-------|
 | Google Gemini | `gemini` | Default. `gemini-2.5-flash` / `gemini-2.5-pro` |
 | OpenAI | `openai` | `gpt-4o-mini` / `gpt-4o` |
-| Azure AI Foundry | `azure` | Set `MALHAUS_LLM_ENDPOINT` to your Azure endpoint |
-| Anthropic Claude | `claude` | `claude-haiku-4-5-20251001` / `claude-sonnet-4-6` |
+| Azure AI Foundry (OpenAI) | `azure` | Set `MALHAUS_LLM_ENDPOINT` to your Azure endpoint |
+| Azure AI Foundry (Claude) | `claude` | Set `MALHAUS_LLM_ENDPOINT` + `MALHAUS_AZURE_USE_ENTRA_ID=1` for keyless Entra ID auth |
+| Anthropic Claude (direct) | `claude` | `claude-haiku-4-5-20251001` / `claude-sonnet-4-6` |
 | DeepSeek | `deepseek` | `deepseek-chat` |
 | Any OpenAI-compatible | `openai` | Set `MALHAUS_LLM_ENDPOINT` (Ollama, vLLM, LM Studio…) |
 
-See `.env.example` for full configuration examples.
+See `.env.example` for full configuration examples including Azure AI Foundry Entra ID setup.
 
 ---
 
