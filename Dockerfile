@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -37,12 +37,10 @@ RUN apt-get update \
 RUN apt-get update && apt-get install -y --no-install-recommends pev; \
     rm -rf /var/lib/apt/lists/* ; true
 
-# JDK 21 — required by Ghidra 11+ (best-effort via backports)
+# JDK 21 — required by Ghidra 11+ (available in Ubuntu 24.04 main repos)
 # Creates /usr/lib/jvm/java-21-current symlink so JAVA_HOME works on any arch.
-RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
-      > /etc/apt/sources.list.d/backports.list \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends -t bookworm-backports openjdk-21-jdk-headless \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
   && ln -sf "$(dirname "$(dirname "$(readlink -f /usr/bin/java)")")" /usr/lib/jvm/java-21-current \
   && rm -rf /var/lib/apt/lists/* \
   || ( rm -rf /var/lib/apt/lists/* ; true )
