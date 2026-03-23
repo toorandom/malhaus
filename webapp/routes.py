@@ -494,7 +494,6 @@ def upload():
         flash(f"Rate limit: max {config.MAX_PER_HOUR_PER_IP} submissions/hour for {ip}.", "error")
         return redirect(url_for("bp.index"))
 
-    url = (request.form.get("url") or "").strip()
     sha_lookup = (request.form.get("sha256_lookup") or "").strip().lower()
     use_ghidra = (request.form.get("use_ghidra") == "1")
 
@@ -502,6 +501,8 @@ def upload():
         return redirect(url_for("bp.report_sha", sha256=sha_lookup))
 
     f = request.files.get("file")
+    # File takes priority over URL — if a file is chosen, ignore any URL in the form
+    url = "" if (f and f.filename) else (request.form.get("url") or "").strip()
     if not url and (not f or not f.filename):
         flash("Provide a file OR an http/https URL OR a SHA-256.", "error")
         return redirect(url_for("bp.index"))
