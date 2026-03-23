@@ -224,6 +224,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 pre["mandatory_radare2_entry"] = radare2_entry_disasm(inner)
                 cb("PE section entropy")
                 pre["mandatory_pe_section_entropy"] = pe_section_entropy(inner)
+                cb(".NET metadata analysis")
+                pre["mandatory_dotnet_analysis"] = dotnet_analysis(inner)
                 if options.get("use_ghidra"):
                     cb("Ghidra: full scan of extracted PE…")
                     pre["mandatory_ghidra_malhaus"] = ghidra_malhaus(inner)
