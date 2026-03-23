@@ -288,6 +288,39 @@ To add support for a completely new kind (e.g. `"wasm"`):
 
 ---
 
+## Python-library tools (no CLI subprocess)
+
+Some tools use a Python library directly instead of wrapping a CLI command. The pattern is slightly different:
+
+- **No `@tool` decorator** if the tool is only run in preflight (mandatory) and the LLM should never call it on demand. Without `@tool` it is not added to `TOOL_REGISTRY` and the LLM cannot call it.
+- **Return the same dict shape** — `{"ok": True/False, "stdout": "...", "stderr": "...", "rc": 0}` — so `show_block()` in the template renders it correctly.
+- **Extra fields are allowed** — e.g. `dotnet_analysis` returns a `"capabilities"` dict that `heuristics.py` reads directly from `preflight["mandatory_dotnet_analysis"]["capabilities"]`. The template only uses `stdout`.
+- **Add `@tool` if** you also want the LLM to be able to call it during the verdict loop (e.g. as a supplementary tool on demand).
+
+Example — `dotnet_analysis` in `tools/cli_tools.py`:
+
+```python
+def dotnet_analysis(path: str) -> Dict[str, Any]:
+    try:
+        import dnfile
+    except ImportError:
+        return {"ok": False, "error": "dnfile not installed", "stdout": "", "stderr": "dnfile not installed", "rc": 1}
+    # ... parse .NET metadata ...
+    return {
+        "ok": True,
+        "stdout": "\n".join(lines),   # shown in report via show_block()
+        "stderr": "",
+        "rc": 0,
+        "capabilities": {...},        # consumed by heuristics.py
+    }
+```
+
+If the library is not installed, return `ok: False` with a clear error — the tool will show the error in the report rather than crashing.
+
+**Remember:** if you add a new pip dependency, add it to `requirements.txt` and rebuild the Docker image (`docker compose up -d --build`). For bare-metal deployments, run `.venv/bin/pip install <package>` and restart.
+
+---
+
 ## Full example — `get_strings_size` end to end
 
 ### `tools/cli_tools.py` — the tool function
