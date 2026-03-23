@@ -17,11 +17,16 @@ from tools.cli_tools import (
     pe_section_entropy,
 )
 
-# Optional custom tool (won't break if not installed/enabled)
+# Optional custom tools (won't break if not installed/enabled)
 try:
     from custom_tools.ghidra_headless import ghidra_headless_summary  # type: ignore
 except Exception:
     ghidra_headless_summary = None  # type: ignore
+
+try:
+    from custom_tools.dotnet_analysis import dotnet_analysis as _dotnet_analysis  # type: ignore
+except Exception:
+    _dotnet_analysis = None  # type: ignore
 
 
 def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=None) -> Dict[str, Any]:
@@ -113,6 +118,10 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         pre["mandatory_radare2_entry"] = radare2_entry_disasm(sample)
         cb("PE section entropy")
         pre["mandatory_pe_section_entropy"] = pe_section_entropy(sample)
+
+        if _dotnet_analysis:
+            cb(".NET metadata analysis")
+            pre["mandatory_dotnet_analysis"] = _dotnet_analysis.invoke({"path": sample})
 
         if options.get("use_ghidra"):
             cb("Ghidra: full scan (this takes a while…)")

@@ -237,6 +237,7 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         _add(low_level_snippets, "objdump_pe_dynamic",   _s("mandatory_objdump_pe_dynamic"))
         _add(low_level_snippets, "radare2_info",         _s("mandatory_radare2_info"))
         _add(low_level_snippets, "radare2_entry",        _s("mandatory_radare2_entry"))
+        _add(low_level_snippets, "dotnet_analysis",      _s("mandatory_dotnet_analysis"))
         if options.get("use_ghidra"):
             _add(low_level_snippets, "ghidra_malhaus",   _s("mandatory_ghidra_malhaus"))
 
@@ -288,4 +289,8 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
     }
     if preflight.get("analysis_note"):
         pack["analysis_note"] = preflight["analysis_note"]
+    # Pass .NET capabilities to heuristics
+    dotnet_result = preflight.get("mandatory_dotnet_analysis") or {}
+    if dotnet_result.get("capabilities"):
+        pack["dotnet_capabilities"] = dotnet_result["capabilities"]
     return pack

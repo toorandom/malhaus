@@ -132,12 +132,17 @@
         {{ show_block("radare2 quick info (iIj/iSj/iMj/aflj/ie)", p.get("radare2_quick_json") or p.get("mandatory_radare2_info")) }}
         {{ show_block("radare2 entry disasm (pdf @ entry0)", p.get("radare2_entry_disasm") or p.get("mandatory_radare2_entry")) }}
 
+	{# --- .NET analysis --- #}
+	{% set dn = p.get("mandatory_dotnet_analysis") %}
+	{% if dn is not none %}
+		{{ show_block(".NET metadata analysis (dnfile)", dn) }}
+	{% endif %}
+
 	{# --- Ghidra (experimental) --- #}
 	{% set gh = p.get("mandatory_ghidra_malhaus") or p.get("ghidra_malhaus") %}
 	{% if gh is not none %}
   		{{ show_block("Ghidra Eduardo's Malhaus score", gh) }}
 	{% endif %}
-
 
       {% elif kind == 'elf' %}
         {{ show_block("readelf -a", p.get("readelf_all") or p.get("mandatory_readelf_all")) }}

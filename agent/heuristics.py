@@ -69,6 +69,31 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
     if real_payloads:
         score += 8; reasons.append(f"Embedded/extracted payloads present ({len(real_payloads)} likely payload files).")
 
+    # .NET capability signals from dnfile analysis
+    dotnet = ev.get("dotnet_capabilities") or {}
+    if dotnet:
+        dn_score = 0
+        dn_reasons = []
+        if dotnet.get("runtime_code_loading"):
+            dn_score += 20; dn_reasons.append("Assembly.Load/runtime code loading")
+        if dotnet.get("powershell_execution"):
+            dn_score += 25; dn_reasons.append("PowerShell execution capability")
+        if dotnet.get("memory_injection"):
+            dn_score += 30; dn_reasons.append("memory injection APIs (VirtualAlloc/WriteProcessMemory)")
+        if dotnet.get("thread_injection"):
+            dn_score += 30; dn_reasons.append("thread injection APIs (CreateRemoteThread/NtCreateThreadEx)")
+        if dotnet.get("av_exclusion") or dotnet.get("av_disable"):
+            dn_score += 25; dn_reasons.append("AV/Defender exclusion/disable APIs")
+        if dotnet.get("embedded_resource_blob"):
+            dn_score += 15; dn_reasons.append(f"large embedded .NET resource blob(s): {', '.join(list(dotnet['embedded_resource_blob'])[:2])}")
+        if dotnet.get("obfuscation"):
+            dn_score += 10; dn_reasons.append("obfuscated type/method names")
+        if dotnet.get("process_creation") and dotnet.get("runtime_code_loading"):
+            dn_score += 10; dn_reasons.append("process creation + runtime loading combo")
+        if dn_score > 0:
+            score += min(dn_score, 50)
+            reasons.append(f".NET analysis: {'; '.join(dn_reasons)}.")
+
     # Strings LLM contribution
     llm_score = None
     llm_ok = isinstance(strings_llm, dict) and not strings_llm.get("error")

@@ -71,6 +71,7 @@ oletools==0.60.2
 orjson==3.11.7
 packaging==26.0
 pefile==2024.8.26
+dnfile>=0.14
 pillow==12.1.1
 pipdeptree==2.31.0
 platformdirs==4.9.2
