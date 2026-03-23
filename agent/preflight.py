@@ -15,6 +15,7 @@ from tools.cli_tools import (
     pdf_analysis, lnk_analysis,
     _archive_extract_impl,
     pe_section_entropy,
+    dotnet_analysis,
 )
 
 # Optional custom tools (won't break if not installed/enabled)
@@ -23,10 +24,6 @@ try:
 except Exception:
     ghidra_headless_summary = None  # type: ignore
 
-try:
-    from custom_tools.dotnet_analysis import dotnet_analysis as _dotnet_analysis  # type: ignore
-except Exception:
-    _dotnet_analysis = None  # type: ignore
 
 
 def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=None) -> Dict[str, Any]:
@@ -119,9 +116,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         cb("PE section entropy")
         pre["mandatory_pe_section_entropy"] = pe_section_entropy(sample)
 
-        if _dotnet_analysis:
-            cb(".NET metadata analysis")
-            pre["mandatory_dotnet_analysis"] = _dotnet_analysis.invoke({"path": sample})
+        cb(".NET metadata analysis")
+        pre["mandatory_dotnet_analysis"] = dotnet_analysis(sample)
 
         if options.get("use_ghidra"):
             cb("Ghidra: full scan (this takes a while…)")

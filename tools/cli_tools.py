@@ -278,7 +278,165 @@ def ghidra_malhaus(path: str) -> Dict[str,Any]:
         return {"cmd": f"{ghidra_m} {path}", "stdout": "", "stderr": "TIMEOUT", "rc": None, "ok": False}
     except Exception as e:
         return {"cmd": f"{ghidra_m} {path}", "stdout": "", "stderr": f"EXCEPTION: {type(e).__name__}: {e}", "rc": None, "ok": False}
-    
+
+
+def dotnet_analysis(path: str) -> Dict[str, Any]:
+    """
+    Analyse a .NET PE file with dnfile.
+    Extracts type/assembly/method references, .NET resources, and obfuscation
+    indicators — things invisible to strings analysis when payloads are
+    encrypted and loaded at runtime via Assembly.Load.
+    """
+    import math as _math, re as _re
+    from collections import defaultdict as _dd
+
+    try:
+        import dnfile  # type: ignore
+    except ImportError:
+        return {"ok": False, "error": "dnfile not installed", "stdout": "", "stderr": "dnfile not installed", "rc": 1}
+
+    try:
+        dn = dnfile.dnPE(path)
+    except Exception as e:
+        return {"ok": False, "error": f"dnfile parse failed: {e}", "stdout": "", "stderr": str(e), "rc": 1}
+
+    if not dn.net:
+        return {"ok": False, "error": "Not a .NET PE", "stdout": "Not a .NET PE (no CLR header).", "stderr": "", "rc": 0}
+
+    _SUSPICIOUS_NS = {
+        "System.Management.Automation":           "powershell_execution",
+        "System.Management.Automation.Runspaces": "powershell_execution",
+        "Microsoft.Win32":                         "registry_access",
+        "System.Reflection":                       "runtime_code_loading",
+        "System.Reflection.Emit":                  "runtime_code_generation",
+        "System.Runtime.InteropServices":          "native_interop",
+        "System.Diagnostics.Process":             "process_creation",
+        "System.Net":                              "network_access",
+        "System.Net.Sockets":                      "raw_socket",
+        "System.Security.Cryptography":            "crypto",
+        "System.IO.Compression":                   "compression",
+        "Microsoft.CSharp":                        "dynamic_code",
+    }
+    _SUSPICIOUS_TYPES = {
+        "Assembly": "runtime_code_loading", "Activator": "runtime_code_loading",
+        "DllImport": "native_interop", "Marshal": "native_interop",
+        "WebClient": "network_download", "HttpClient": "network_access",
+        "TcpClient": "raw_socket", "RegistryKey": "registry_access",
+        "Process": "process_creation", "ProcessStartInfo": "process_creation",
+        "Mutex": "mutex", "AesManaged": "crypto", "RijndaelManaged": "crypto",
+        "RSACryptoServiceProvider": "crypto", "GZipStream": "compression",
+        "PowerShell": "powershell_execution", "Runspace": "powershell_execution",
+        "RunspaceFactory": "powershell_execution",
+        "WindowsIdentity": "privilege_check", "WindowsPrincipal": "privilege_check",
+        "Bitmap": "screenshot", "SendKeys": "input_simulation",
+    }
+    _SUSPICIOUS_METHODS = {
+        "Load": "runtime_code_loading", "LoadFile": "runtime_code_loading",
+        "LoadFrom": "runtime_code_loading", "CreateInstance": "runtime_code_loading",
+        "InvokeMember": "reflection_invoke", "GetMethod": "reflection_invoke",
+        "CreateProcess": "process_creation",
+        "VirtualAlloc": "memory_injection", "VirtualAllocEx": "memory_injection",
+        "WriteProcessMemory": "memory_injection",
+        "CreateRemoteThread": "thread_injection", "NtCreateThreadEx": "thread_injection",
+        "QueueUserAPC": "apc_injection", "SetWindowsHookEx": "hook_injection",
+        "AddMpPreference": "av_exclusion", "ExclusionPath": "av_exclusion",
+        "DisableRealtimeMonitoring": "av_disable",
+    }
+
+    def _shannon(s):
+        if not s: return 0.0
+        from collections import Counter
+        freq = Counter(s)
+        n = len(s)
+        return -sum((f/n)*_math.log2(f/n) for f in freq.values())
+
+    def _obfuscated(name):
+        if not name or len(name) < 2: return False
+        if _shannon(name) > 3.8 and len(name) >= 6: return True
+        if _re.fullmatch(r'[a-zA-Z0-9]{1,4}', name): return True
+        return False
+
+    caps = _dd(set)
+    lines = []
+    obf_count = 0
+    total_types = 0
+
+    lines.append("== Assembly References ==")
+    try:
+        for row in (dn.net.mdtables.AssemblyRef or []):
+            name = str(row.Name) if row.Name else ""
+            ver = f"{row.MajorVersion}.{row.MinorVersion}.{row.BuildNumber}.{row.RevisionNumber}"
+            lines.append(f"  {name} v{ver}")
+            for ns, cap in _SUSPICIOUS_NS.items():
+                if name and ns.startswith(name):
+                    caps[cap].add(f"AssemblyRef:{name}")
+    except Exception as e:
+        lines.append(f"  [error: {e}]")
+
+    lines.append("\n== Suspicious Type References ==")
+    seen: _dd = _dd(set)
+    try:
+        for row in (dn.net.mdtables.TypeRef or []):
+            ns   = str(row.TypeNamespace) if row.TypeNamespace else ""
+            name = str(row.TypeName) if row.TypeName else ""
+            fqn  = f"{ns}.{name}" if ns else name
+            total_types += 1
+            if _obfuscated(name): obf_count += 1
+            for sus_ns, cap in _SUSPICIOUS_NS.items():
+                if ns.startswith(sus_ns) and fqn not in seen[cap]:
+                    caps[cap].add(fqn); lines.append(f"  [{cap}] {fqn}"); seen[cap].add(fqn); break
+            else:
+                for sus_t, cap in _SUSPICIOUS_TYPES.items():
+                    if name == sus_t and fqn not in seen[cap]:
+                        caps[cap].add(fqn); lines.append(f"  [{cap}] {fqn}"); seen[cap].add(fqn); break
+    except Exception as e:
+        lines.append(f"  [error: {e}]")
+
+    lines.append("\n== Suspicious Method References ==")
+    seen_m: set = set()
+    try:
+        for row in (dn.net.mdtables.MemberRef or []):
+            mname = str(row.Name) if row.Name else ""
+            for sus_m, cap in _SUSPICIOUS_METHODS.items():
+                if mname == sus_m and mname not in seen_m:
+                    caps[cap].add(f"MemberRef:{mname}"); lines.append(f"  [{cap}] {mname}()"); seen_m.add(mname); break
+    except Exception as e:
+        lines.append(f"  [error: {e}]")
+
+    lines.append("\n== .NET Resources ==")
+    try:
+        for res in (dn.net.resources or []):
+            rname = str(res.name) if hasattr(res, "name") else "?"
+            rsize = res.size if hasattr(res, "size") else 0
+            flag  = "  *** LARGE — possible embedded payload ***" if rsize > 50_000 else ""
+            lines.append(f"  {rname}  ({rsize:,} bytes){flag}")
+            if rsize > 50_000:
+                caps["embedded_resource_blob"].add(f"{rname} ({rsize:,} bytes)")
+    except Exception as e:
+        lines.append(f"  [error: {e}]")
+
+    lines.append("\n== Obfuscation Indicators ==")
+    if total_types > 0:
+        ratio = obf_count / total_types
+        lines.append(f"  Obfuscated-looking type names: {obf_count}/{total_types} ({ratio:.0%})")
+        if ratio > 0.3:
+            caps["obfuscation"].add(f"{ratio:.0%} of type names appear obfuscated")
+
+    lines.append("\n== Capability Summary ==")
+    if caps:
+        for cap, refs in sorted(caps.items()):
+            lines.append(f"  {cap}: {', '.join(sorted(refs)[:4])}")
+    else:
+        lines.append("  No suspicious capabilities detected.")
+
+    return {
+        "ok": True,
+        "stdout": "\n".join(lines),
+        "stderr": "",
+        "rc": 0,
+        "capabilities": {k: list(v) for k, v in caps.items()},
+    }
+
 
 @tool
 def readpe_all(path: str) -> Dict[str, Any]:
