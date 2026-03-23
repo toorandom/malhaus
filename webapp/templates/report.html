@@ -505,7 +505,7 @@
       <div class="muted" style="margin-top:8px;">No verdict LLM calls recorded in this report.</div>
     {% else %}
       {% for c in calls %}
-        <details{% if c.get("failed") %} open{% endif %}>
+        <details{% if c.get("failed") or loop.last %} open{% endif %}>
           <summary class="mono">
             Verdict call #{{ loop.index }}{% if c.get("iteration") is not none %} (iteration {{ c["iteration"] }}){% endif %}
             {% if c.get("failed") %}<span style="color:var(--red);"> ⚠ timeout/error — no LLM response</span>{% endif %}

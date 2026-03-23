@@ -324,9 +324,23 @@ RULES:
         cb(f"LLM call #{iteration + 1} completed in {_elapsed:.1f}s")
         raw = resp.content if isinstance(resp.content, str) else json.dumps(resp.content)
 
-        # Unwrap Gemini's [{"type":"text","text":"..."}] envelope for clean display
-        decoded = _unwrap_text(json.loads(raw)) if raw.strip().startswith("[") else None
-        display_output = decoded if decoded else raw
+        # Unwrap Gemini's [{"type":"text","text":"...","extras":{...}}] envelope for clean display.
+        # extras contains provider-internal signing metadata — strip it before storing.
+        if raw.strip().startswith("["):
+            try:
+                items = json.loads(raw)
+                decoded = _unwrap_text(items)
+                if decoded:
+                    display_output = decoded
+                else:
+                    # Can't unwrap to plain text — at least strip extras noise
+                    cleaned = [{k: v for k, v in item.items() if k != "extras"}
+                               if isinstance(item, dict) else item for item in items]
+                    display_output = json.dumps(cleaned)
+            except Exception:
+                display_output = raw
+        else:
+            display_output = raw
 
         # Store last human message as the prompt shown in debug (skip system prompt)
         last_human = next(
