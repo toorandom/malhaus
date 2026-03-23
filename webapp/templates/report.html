@@ -138,6 +138,12 @@
 		{{ show_block(".NET metadata analysis (dnfile)", dn) }}
 	{% endif %}
 
+	{# --- binwalk embedded signatures --- #}
+	{% set bw = p.get("mandatory_binwalk") %}
+	{% if bw is not none %}
+		{{ show_block("binwalk (embedded file signatures)", bw) }}
+	{% endif %}
+
 	{# --- Ghidra (experimental) --- #}
 	{% set gh = p.get("mandatory_ghidra_malhaus") or p.get("ghidra_malhaus") %}
 	{% if gh is not none %}
@@ -148,6 +154,12 @@
         {{ show_block("readelf -a", p.get("readelf_all") or p.get("mandatory_readelf_all")) }}
         {{ show_block("objdump -p (dynamic)", p.get("objdump_elf_dynamic") or p.get("mandatory_objdump_elf_dynamic")) }}
         {{ show_block("ldd", p.get("ldd_deps") or p.get("mandatory_ldd_deps")) }}
+
+	{# --- binwalk embedded signatures --- #}
+	{% set bw = p.get("mandatory_binwalk") %}
+	{% if bw is not none %}
+		{{ show_block("binwalk (embedded file signatures)", bw) }}
+	{% endif %}
 
 	{# --- Ghidra (experimental) --- #}
 	{% set gh = p.get("mandatory_ghidra_malhaus") or p.get("ghidra_malhaus") %}

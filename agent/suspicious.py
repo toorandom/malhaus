@@ -238,6 +238,7 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         _add(low_level_snippets, "radare2_info",         _s("mandatory_radare2_info"))
         _add(low_level_snippets, "radare2_entry",        _s("mandatory_radare2_entry"))
         _add(low_level_snippets, "dotnet_analysis",      _s("mandatory_dotnet_analysis"))
+        _add(low_level_snippets, "binwalk",              _s("mandatory_binwalk"))
         if options.get("use_ghidra"):
             _add(low_level_snippets, "ghidra_malhaus",   _s("mandatory_ghidra_malhaus"))
 
@@ -245,6 +246,7 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         _add(low_level_snippets, "readelf_all",          _s("mandatory_readelf_all"))
         _add(low_level_snippets, "objdump_elf_dynamic",  _s("mandatory_objdump_elf_dynamic"))
         _add(low_level_snippets, "ldd_deps",             _s("mandatory_ldd_deps"))
+        _add(low_level_snippets, "binwalk",              _s("mandatory_binwalk"))
         if options.get("use_ghidra"):
             _add(low_level_snippets, "ghidra_malhaus",   _s("mandatory_ghidra_malhaus"))
 

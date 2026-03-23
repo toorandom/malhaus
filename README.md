@@ -115,6 +115,7 @@ The pipeline runs mandatory tools automatically in preflight (every submission) 
 | `radare2` | Mandatory | Disassembly, entry point analysis, PE/ELF info | PE, ELF |
 | `elfutils` | Mandatory | ELF analysis (`readelf`) | ELF |
 | `pev` / `osslsigncode` | Mandatory | PE section info, Authenticode verification | PE |
+| `binwalk` | Mandatory | Embedded file signature scanning — finds payloads appended to or hidden inside binaries | PE, ELF |
 | `p7zip` | Mandatory | Archive extraction | ZIP, 7z, RAR… |
 | `firejail` | Mandatory | Sandbox wrapper for CLI tools | All |
 | `nodejs` / `js-beautify` | Mandatory | JavaScript deobfuscation | JS |

@@ -16,6 +16,7 @@ from tools.cli_tools import (
     _archive_extract_impl,
     pe_section_entropy,
     dotnet_analysis,
+    binwalk_scan,
 )
 
 # Optional custom tools (won't break if not installed/enabled)
@@ -118,6 +119,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
 
         cb(".NET metadata analysis")
         pre["mandatory_dotnet_analysis"] = dotnet_analysis(sample)
+        cb("binwalk: embedded signature scan")
+        pre["mandatory_binwalk"] = binwalk_scan(sample)
 
         if options.get("use_ghidra"):
             cb("Ghidra: full scan (this takes a while…)")
@@ -130,6 +133,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         pre["mandatory_objdump_elf_dynamic"] = objdump_elf_dynamic(sample)
         cb("readelf: shared library deps")
         pre["mandatory_ldd_deps"] = ldd_deps(sample)
+        cb("binwalk: embedded signature scan")
+        pre["mandatory_binwalk"] = binwalk_scan(sample)
         if options.get("use_ghidra"):
             cb("Ghidra: full scan (this takes a while…)")
             pre["mandatory_ghidra_malhaus"] = ghidra_malhaus(sample)
@@ -226,6 +231,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 pre["mandatory_pe_section_entropy"] = pe_section_entropy(inner)
                 cb(".NET metadata analysis")
                 pre["mandatory_dotnet_analysis"] = dotnet_analysis(inner)
+                cb("binwalk: embedded signature scan")
+                pre["mandatory_binwalk"] = binwalk_scan(inner)
                 if options.get("use_ghidra"):
                     cb("Ghidra: full scan of extracted PE…")
                     pre["mandatory_ghidra_malhaus"] = ghidra_malhaus(inner)
@@ -237,6 +244,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 pre["mandatory_objdump_elf_dynamic"] = objdump_elf_dynamic(inner)
                 cb("ldd: shared library deps")
                 pre["mandatory_ldd_deps"] = ldd_deps(inner)
+                cb("binwalk: embedded signature scan")
+                pre["mandatory_binwalk"] = binwalk_scan(inner)
                 if options.get("use_ghidra"):
                     cb("Ghidra: full scan of extracted ELF…")
                     pre["mandatory_ghidra_malhaus"] = ghidra_malhaus(inner)

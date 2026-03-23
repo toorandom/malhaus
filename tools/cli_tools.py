@@ -438,6 +438,18 @@ def dotnet_analysis(path: str) -> Dict[str, Any]:
     }
 
 
+def binwalk_scan(path: str) -> Dict[str, Any]:
+    """
+    Scan a binary for embedded file signatures using binwalk.
+    Finds payloads hidden inside PE overlays, appended archives, certificate
+    blobs, or any embedded content that pefile's overlay method misses.
+    Runs on PE and ELF files in preflight — does not extract, only reports.
+    """
+    if not which("binwalk"):
+        return {"ok": False, "error": "binwalk not installed", "stdout": "", "stderr": "", "rc": 1}
+    return run_jailed(["binwalk", path], path, timeout=60, max_bytes=100000)
+
+
 @tool
 def readpe_all(path: str) -> Dict[str, Any]:
     if which("readpe"):
