@@ -251,10 +251,33 @@ def upx_unpack(path: str) -> Dict[str, Any]:
 @tool
 def ghidra_malhaus(path: str) -> Dict[str,Any]:
     ghidra_m = TOOLS_DIR / "ghidra_malhaus"
-    if ghidra_m.exists():
-        print("Running ghidra_malhaus over: " + path)
-        return run([str(ghidra_m) , path], timeout=600, max_bytes=650000)
-    return {"ok": False,"error": f"ghidra_malhaus was not found {ghidra_m}"}
+    if not ghidra_m.exists():
+        return {"ok": False, "error": f"ghidra_malhaus was not found {ghidra_m}"}
+    print("Running ghidra_malhaus over: " + path)
+    # Run in a new process group so JVM signals (SIGTERM etc.) don't reach
+    # the gunicorn worker process and crash it.
+    import os as _os
+    try:
+        p = subprocess.Popen(
+            [str(ghidra_m), path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**_os.environ.copy(), "LC_ALL": "C", "LANG": "C"},
+            start_new_session=True,
+        )
+        stdout, stderr = p.communicate(timeout=600)
+        max_bytes = 650000
+        return {
+            "cmd": f"{ghidra_m} {path}",
+            "stdout": stdout[:max_bytes].decode(errors="replace"),
+            "stderr": stderr[:max_bytes].decode(errors="replace"),
+            "rc": p.returncode,
+            "ok": True,
+        }
+    except subprocess.TimeoutExpired:
+        p.kill(); p.communicate()
+        return {"cmd": f"{ghidra_m} {path}", "stdout": "", "stderr": "TIMEOUT", "rc": None, "ok": False}
+    except Exception as e:
+        return {"cmd": f"{ghidra_m} {path}", "stdout": "", "stderr": f"EXCEPTION: {type(e).__name__}: {e}", "rc": None, "ok": False}
     
 
 @tool
