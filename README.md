@@ -53,12 +53,12 @@ cd malhaus
 cp .env.example .env
 # edit .env — set MALHAUS_SECRET_KEY and your LLM provider + key
 
-# 4. Point nginx at your domain
-sed -i 's/your-domain.com/yourdomain.com/g' nginx/nginx.conf
+# 4. Point nginx at your domain (replace youractualdomain.org with your real domain)
+sed -i 's/your-domain.com/youractualdomain.org/g' nginx/nginx.conf
 
 # 5a. Get a TLS certificate — public domain (Let's Encrypt)
 sudo apt install -y certbot
-sudo certbot certonly --standalone -d yourdomain.com
+sudo certbot certonly --standalone -d youractualdomain.org
 
 # 5b. OR — self-signed certificate for internal/air-gapped deployments
 #     (browser will warn; add the cert to your internal CA trust store to silence it)
@@ -82,7 +82,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The app is now reachable at `https://yourdomain.com` (or `https://<server-ip>` for self-signed).
+The app is now reachable at `https://youractualdomain.org` (or `https://<server-ip>` for self-signed).
 
 See [START.md](START.md) for the full deployment guide including updates, backups, moving to another machine, and troubleshooting.
 
@@ -105,36 +105,31 @@ nano config.source             # set MALHAUS_LLM_PROVIDER, MALHAUS_LLM_API_KEY, 
 
 ## Analysis tools
 
-The pipeline runs a combination of system tools (installed via apt) and Python libraries (installed via pip). All tools run automatically in preflight; the LLM can call supplementary tools on demand.
+The pipeline runs mandatory tools automatically in preflight (every submission) and makes supplementary tools available for the LLM to call on demand during the verdict loop.
 
 ### System tools (apt)
 
-| Tool | Purpose | File types |
-|------|---------|------------|
-| `strings` / `file` / `binutils` | String extraction, file type detection, objdump | All |
-| `radare2` | Disassembly, entry point analysis, PE/ELF info | PE, ELF |
-| `yara` | YARA rule matching | All |
-| `ssdeep` | Fuzzy hashing | All |
-| `elfutils` | ELF analysis (`readelf`) | ELF |
-| `pev` / `osslsigncode` | PE section info, Authenticode verification | PE |
-| `binwalk` | Embedded file carving | All |
-| `exiftool` | Metadata extraction | All |
-| `p7zip` | Archive extraction | ZIP, 7z, RAR… |
-| `firejail` | Sandbox wrapper for CLI tools | All |
-| `nodejs` / `js-beautify` | JavaScript deobfuscation | JS |
-| `openjdk-21` *(Docker)* | Required by Ghidra headless | PE, ELF |
+| Tool | Usage | Purpose | File types |
+|------|-------|---------|------------|
+| `strings` / `file` / `binutils` | Mandatory | String extraction, file type detection, objdump | All |
+| `radare2` | Mandatory | Disassembly, entry point analysis, PE/ELF info | PE, ELF |
+| `elfutils` | Mandatory | ELF analysis (`readelf`) | ELF |
+| `pev` / `osslsigncode` | Mandatory | PE section info, Authenticode verification | PE |
+| `p7zip` | Mandatory | Archive extraction | ZIP, 7z, RAR… |
+| `firejail` | Mandatory | Sandbox wrapper for CLI tools | All |
+| `nodejs` / `js-beautify` | Mandatory | JavaScript deobfuscation | JS |
+| `ssdeep` | Supplementary | Fuzzy hashing — find similar files across malware families | All |
+| `exiftool` | Supplementary | Metadata extraction | LNK |
+| `openjdk-21` *(Docker)* | Optional | Required by Ghidra headless | PE, ELF |
 
 ### Python libraries (pip)
 
-| Library | Purpose | File types |
-|---------|---------|------------|
-| `oletools` (oledump, olevba, oleobj, rtfobj) | OLE/VBA macro analysis, object extraction | Office, RTF |
-| `flare-floss` | Deobfuscated string extraction (stack strings, encoded strings) | PE, ELF |
-| `pefile` | PE header/section/import parsing | PE |
-| `dnfile` | .NET metadata analysis — type refs, Assembly.Load, embedded resources, obfuscation | .NET PE |
-| `yara-python` | YARA rule engine | All |
-| `ssdeep` | Fuzzy hash computation | All |
-| `python-magic` | File type detection | All |
+| Library | Usage | Purpose | File types |
+|---------|-------|---------|------------|
+| `oletools` (oledump, olevba, oleobj, rtfobj) | Mandatory | OLE/VBA macro analysis, object extraction | Office, RTF |
+| `flare-floss` | Mandatory | Deobfuscated string extraction (stack strings, encoded strings) | PE, ELF |
+| `pefile` | Mandatory | PE header/section/import parsing | PE |
+| `dnfile` | Mandatory | .NET metadata analysis — type refs, Assembly.Load, embedded resources, obfuscation | .NET PE |
 
 ### Didier Stevens tools (downloaded at build time)
 
