@@ -3,7 +3,7 @@ FROM debian:bookworm-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
-    JAVA_HOME=/usr/lib/jvm/default-java
+    JAVA_HOME=/usr/lib/jvm/java-21-current
 
 # ── System packages ───────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,12 +37,13 @@ RUN apt-get update \
 RUN apt-get update && apt-get install -y --no-install-recommends pev; \
     rm -rf /var/lib/apt/lists/* ; true
 
-# JDK — required by Ghidra (optional; skip if not needed)
-# Debian bookworm ships openjdk-17; that covers Ghidra 10.x.
-# For Ghidra 11+ (needs Java 21) install temurin-21 on the host and
-# mount it in, or add the Eclipse Adoptium repo here.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends default-jdk-headless \
+# JDK 21 — required by Ghidra 11+ (best-effort via backports)
+# Creates /usr/lib/jvm/java-21-current symlink so JAVA_HOME works on any arch.
+RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
+      > /etc/apt/sources.list.d/backports.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends -t bookworm-backports openjdk-21-jdk-headless \
+  && ln -sf "$(dirname "$(dirname "$(readlink -f /usr/bin/java)")")" /usr/lib/jvm/java-21-current \
   && rm -rf /var/lib/apt/lists/* \
   || ( rm -rf /var/lib/apt/lists/* ; true )
 RUN npm install -g js-beautify --quiet || true
