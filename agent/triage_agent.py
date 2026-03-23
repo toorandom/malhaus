@@ -200,6 +200,9 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "msi":   {"msi_extract", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
     }
     already_ran = _MANDATORY_BY_KIND.get(kind, {"entropy_shannon", "sha256", "file_info", "strings_ascii", "extract_payloads"})
+    # If Ghidra ran in preflight, don't let the LLM re-call it
+    if options and options.get("use_ghidra") and "mandatory_ghidra_malhaus" in pre:
+        already_ran = already_ran | {"ghidra_malhaus"}
     supplementary_registry = {k: v for k, v in TOOL_REGISTRY.items() if k not in already_ran}
     supplementary_catalog = tool_catalog(list(supplementary_registry.values()))
 
