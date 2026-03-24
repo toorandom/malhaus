@@ -162,6 +162,7 @@ FILE-TYPE GUIDANCE:
 - elf: Check dynamic imports, POSIX syscalls, network functions, dropped file paths.
 - lnk: Windows Shortcut files are a common malware delivery vector. ALWAYS call exiftool_lnk and lecmd_lnk (if available) to obtain structured target path, arguments, working directory, and metadata before reaching a verdict.
 - office/office_openxml: Check olevba for VBA macros, AutoOpen/AutoExec triggers, Shell/WScript calls, base64 blobs, external URL references. If openxml_extract reveals embedded .rtf files, run rtfobj_extract with "path" set to the extracted RTF path. If it reveals embedded .pdf files, run pdf_analysis on them. If it reveals .exe/.dll, run strings_ascii on them.
+- msi: The msi_inventory shows ALL extracted files with type, size, and entropy. Use the "path" field to run targeted tools on suspicious files — e.g. strings_ascii/objdump_pe_headers/pe_section_entropy on high-entropy PEs, authenticode_verify on any signed PE. Analyze ALL PEs, not just the largest — MSI droppers often hide payloads in secondary files.
 - pdf: Check for /JavaScript, /OpenAction, /Launch, /EmbeddedFile, suspicious URI streams.
 - ps1/vbs/hta/js/shell: Script files — analyse content directly. Obfuscation, encoded payloads, downloads, persistence = malicious.
 

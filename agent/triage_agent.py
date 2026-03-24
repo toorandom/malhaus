@@ -91,10 +91,14 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
         snips["openxml_extract"] = _snip_stdout(pre.get("mandatory_openxml_extract"), 3000)
     elif kind == "msi":
         msi = pre.get("mandatory_msi_extract") or {}
-        files = msi.get("extracted_files") or []
-        snips["msi_files"] = "\n".join(
-            f"{f.get('path','')}  ({f.get('size',0)} bytes)" for f in files
-        )[:3000]
+        # Use the rich inventory from stdout if available, fall back to plain list
+        if msi.get("stdout"):
+            snips["msi_inventory"] = msi["stdout"][:4000]
+        else:
+            files = msi.get("extracted_files") or []
+            snips["msi_inventory"] = "\n".join(
+                f"{f.get('path','')}  ({f.get('size',0)} bytes)" for f in files
+            )[:3000]
         if msi.get("largest_pe"):
             snips["msi_largest_pe"] = msi["largest_pe"]
         if msi.get("pe_strings_preview"):
@@ -224,14 +228,20 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
                           "openxml_list", "openxml_extract", "rtfobj_extract", "oleobj_extract"},
         "pdf":           {"ssdeep_hash", "pdf_analysis"},
         "lnk":           {"ssdeep_hash", "lnk_analysis", "exiftool_lnk", "lecmd_lnk"},
-        "msi":           {"ssdeep_hash", "msi_extract"},
+        # MSI: LLM uses path field to run PE tools on any extracted file
+        "msi":           {"ssdeep_hash", "strings_ascii", "entropy_shannon",
+                          "objdump_pe_headers", "objdump_pe_imports_dynamic",
+                          "pe_section_entropy", "readpe_all", "pesec",
+                          "authenticode_verify"},
         "ps1":           {"ssdeep_hash", "script_content", "shell_lint"},
         "vbs":           {"ssdeep_hash", "script_content"},
         "hta":           {"ssdeep_hash", "script_content"},
         "js":            {"ssdeep_hash", "script_content", "js_beautify"},
         "shell":         {"ssdeep_hash", "script_content", "shell_lint"},
-        # Archive that could not be promoted — let LLM try extracting
-        "archive":       {"ssdeep_hash", "archive_extract"},
+        # Archive that could not be promoted — LLM can run tools on inner files
+        "archive":       {"ssdeep_hash", "archive_extract", "strings_ascii",
+                          "entropy_shannon", "objdump_pe_headers",
+                          "objdump_pe_imports_dynamic", "pe_section_entropy"},
         # Unknown type — offer generic inspection tools only
         "unknown":       {"ssdeep_hash", "file_info", "strings_ascii", "entropy_shannon"},
     }

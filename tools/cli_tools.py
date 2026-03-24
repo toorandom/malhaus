@@ -1137,9 +1137,25 @@ def archive_extract(path: str) -> Dict[str, Any]:
 @tool
 def msi_extract(path: str) -> Dict[str, Any]:
     """
-    Extract an MSI installer with 7z. Returns list of extracted files,
-    the path to the largest PE found inside, and a strings preview of that PE.
+    Extract an MSI installer with 7z. Returns a structured inventory of all
+    extracted files with PE detection and entropy hints for each, so the
+    verdict LLM can use the path field to run targeted tools on any of them.
     """
+    import math as _math
+    from collections import Counter as _Counter
+
+    def _quick_entropy(fpath: str) -> float:
+        try:
+            with open(fpath, "rb") as _f:
+                data = _f.read(65536)  # sample first 64 KB
+            if not data:
+                return 0.0
+            freq = _Counter(data)
+            n = len(data)
+            return -sum((c / n) * _math.log2(c / n) for c in freq.values())
+        except Exception:
+            return 0.0
+
     if not which("7z"):
         return {"ok": False, "error": "7z not installed"}
 
@@ -1152,7 +1168,6 @@ def msi_extract(path: str) -> Dict[str, Any]:
         path, timeout=120, max_bytes=200000,
     )
 
-    # Walk extracted files; find PE candidates
     pe_files: list = []
     all_files: list = []
     for f in outdir.rglob("*"):
@@ -1160,18 +1175,29 @@ def msi_extract(path: str) -> Dict[str, Any]:
             continue
         try:
             sz = f.stat().st_size
-            all_files.append({"path": str(f), "size": sz})
             with open(f, "rb") as fh:
-                magic = fh.read(2)
-            if magic == b"MZ":
-                pe_files.append((sz, str(f)))
+                magic = fh.read(4)
+            is_pe = magic[:2] == b"MZ"
+            is_elf = magic[:4] == b"\x7fELF"
+            ent = _quick_entropy(str(f))
+            entry = {
+                "path": str(f),
+                "name": f.name,
+                "size": sz,
+                "entropy": round(ent, 2),
+                "type": "pe" if is_pe else ("elf" if is_elf else "other"),
+            }
+            all_files.append(entry)
+            if is_pe or is_elf:
+                pe_files.append(entry)
         except Exception:
             continue
 
-    pe_files.sort(reverse=True)
+    pe_files.sort(key=lambda x: x["size"], reverse=True)
     all_files.sort(key=lambda x: x["size"], reverse=True)
-    largest_pe = pe_files[0][1] if pe_files else None
+    largest_pe = pe_files[0]["path"] if pe_files else None
 
+    # Strings preview of largest PE for backwards compat with strings_llm
     pe_strings = ""
     if largest_pe:
         s_res = run_jailed(
@@ -1180,14 +1206,23 @@ def msi_extract(path: str) -> Dict[str, Any]:
         )
         pe_strings = s_res.get("stdout", "")
 
+    # Build human-readable inventory for the LLM snip
+    lines = []
+    for e in all_files[:50]:
+        flag = " *** HIGH ENTROPY ***" if e["entropy"] >= 7.0 else ""
+        lines.append(f"  [{e['type']:5s}] {e['name']:40s}  {e['size']:>9,} B  entropy={e['entropy']}{flag}  path={e['path']}")
+    inventory = "\n".join(lines)
+
     return {
         "ok": True,
         "extract_rc": extract_result.get("rc"),
         "extract_stderr": extract_result.get("stderr", "")[:1000],
         "extracted_files": all_files[:50],
+        "pe_files": pe_files,
         "pe_count": len(pe_files),
         "largest_pe": largest_pe,
         "pe_strings_preview": pe_strings[:20000],
+        "stdout": inventory,  # shown in report via show_block and in mandatory_snips
     }
 
 
