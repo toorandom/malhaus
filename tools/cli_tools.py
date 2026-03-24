@@ -623,6 +623,24 @@ def _extract_base64_blobs(text: str, outdir: Path, limit: int = 5):
 
 @tool
 def script_content(path: str) -> Dict[str, Any]:
+    """Return file content for analysis. Auto-detects text vs binary:
+    text files → cat; binary files → strings (printable ASCII extraction)."""
+    p = Path(path)
+    try:
+        sample = p.read_bytes()[:4096]
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    null_count = sample.count(b"\x00")
+    non_printable = sum(1 for b in sample if b < 0x09 or (0x0e <= b <= 0x1f and b != 0x1b))
+    is_binary = null_count > 0 or non_printable > len(sample) * 0.1
+    if is_binary:
+        # Binary file — extract printable strings instead of dumping raw bytes
+        if which("strings"):
+            result = run(["strings", "-n", "8", path], timeout=30, max_bytes=650000)
+        else:
+            result = run(["strings", path], timeout=30, max_bytes=650000)
+        result["note"] = "Binary file detected — showing extracted strings, not raw content"
+        return result
     return run(["cat", path], timeout=20, max_bytes=650000)
 
 @tool
