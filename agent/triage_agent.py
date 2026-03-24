@@ -251,8 +251,21 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "unknown":       {"ssdeep_hash", "file_info", "strings_ascii", "entropy_shannon"},
     }
     allowed = _SUPPLEMENTARY_BY_KIND.get(kind, set(TOOL_REGISTRY.keys()))
-    supplementary_registry = {k: v for k, v in TOOL_REGISTRY.items()
-                               if k not in already_ran and k in allowed}
+    # Filter out tools whose underlying binary is not installed so the LLM never
+    # wastes a tool call on something that will immediately fail.
+    _BINARY_DEPS = {
+        "ssdeep_hash": "ssdeep",
+        "ghidra_malhaus": "ghidra",
+        "lecmd_lnk": "lecmd",
+        "js_beautify": "js-beautify",
+        "shell_lint": "bash",
+    }
+    supplementary_registry = {
+        k: v for k, v in TOOL_REGISTRY.items()
+        if k not in already_ran
+        and k in allowed
+        and (which(_BINARY_DEPS[k]) is not None if k in _BINARY_DEPS else True)
+    }
     supplementary_catalog = tool_catalog(list(supplementary_registry.values()))
 
     verdict_raw, tool_results, llm_calls = run_llm_tool_loop(
