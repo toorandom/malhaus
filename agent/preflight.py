@@ -154,12 +154,18 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         for _pe_path in _msi_pes:
             _pe_name = Path(_pe_path).name
             cb(f"MSI: authenticode/headers/entropy on {_pe_name}")
-            pre["mandatory_msi_pe_analysis"][_pe_name] = {
+            _pe_entry = {
                 "path": _pe_path,
                 "authenticode": authenticode_verify(_pe_path),
                 "pe_headers":   objdump_pe_headers(_pe_path),
                 "pe_entropy":   pe_section_entropy(_pe_path),
             }
+            cb(f"MSI: .NET analysis on {_pe_name}")
+            _dotnet = dotnet_analysis(_pe_path)
+            if not (_dotnet.get("error", "").startswith("Not a .NET PE") or
+                    _dotnet.get("error", "").startswith("dnfile")):
+                _pe_entry["dotnet_analysis"] = _dotnet
+            pre["mandatory_msi_pe_analysis"][_pe_name] = _pe_entry
 
     if kind == "pdf":
         cb("PDF: keyword analysis")
@@ -307,12 +313,18 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 for _pe_path in _msi_pes:
                     _pe_name = Path(_pe_path).name
                     cb(f"[{inner_name}] MSI: authenticode/headers/entropy on {_pe_name}")
-                    pre["mandatory_msi_pe_analysis"][_pe_name] = {
+                    _pe_entry = {
                         "path": _pe_path,
                         "authenticode": authenticode_verify(_pe_path),
                         "pe_headers":   objdump_pe_headers(_pe_path),
                         "pe_entropy":   pe_section_entropy(_pe_path),
                     }
+                    cb(f"[{inner_name}] MSI: .NET analysis on {_pe_name}")
+                    _dotnet = dotnet_analysis(_pe_path)
+                    if not (_dotnet.get("error", "").startswith("Not a .NET PE") or
+                            _dotnet.get("error", "").startswith("dnfile")):
+                        _pe_entry["dotnet_analysis"] = _dotnet
+                    pre["mandatory_msi_pe_analysis"][_pe_name] = _pe_entry
 
             elif kind == "pdf":
                 cb(f"[{inner_name}] PDF: keyword analysis")

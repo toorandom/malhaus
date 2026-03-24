@@ -121,6 +121,11 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
                         flag = " *** HIGH ENTROPY ***" if s.get("suspicious") else ""
                         sec_lines.append(f"  {s['name']:<12} entropy={s['entropy']:.4f}{flag}")
                     parts.append(f"[pe_entropy]\n" + "\n".join(sec_lines))
+                dotnet = pe_data.get("dotnet_analysis")
+                if dotnet:
+                    dn_snip = _snip_stdout(dotnet, 1500)
+                    if dn_snip:
+                        parts.append(f"[dotnet_analysis]\n{dn_snip}")
                 pe_snip_parts.append("\n".join(parts))
             snips["msi_pe_analysis"] = "\n\n".join(pe_snip_parts)[:6000]
     elif kind in ("vbs", "hta", "ps1", "js", "shell"):
