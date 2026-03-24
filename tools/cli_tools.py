@@ -557,8 +557,13 @@ def oleobj_extract(path: str) -> Dict[str, Any]:
     if which("oleobj"):
         outdir = EXTRACT_DIR / "oleobj"
         _safe_mkdir(outdir)
-        # Use run() not run_jailed(): firejail whitelist blocks writes to extracted dir.
-        return run(["oleobj", "-d", str(outdir), path], timeout=180, max_bytes=650000)
+        before = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
+        result = run(["oleobj", "-d", str(outdir), path], timeout=180, max_bytes=650000)
+        after = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
+        new_files = sorted(after - before)
+        if new_files:
+            result["extracted_files"] = [str(f) for f in new_files]
+        return result
     return {"ok": False, "error": "oleobj not installed (oletools)"}
 
 
@@ -644,7 +649,13 @@ def openxml_extract(path: str) -> Dict[str, Any]:
     if which("unzip"):
         outdir = EXTRACT_DIR / "openxml"
         _safe_mkdir(outdir)
-        return run(["unzip", "-j", "-o", path, "-d", str(outdir)], timeout=180, max_bytes=200000)
+        before = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
+        result = run(["unzip", "-j", "-o", path, "-d", str(outdir)], timeout=180, max_bytes=200000)
+        after = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
+        new_files = sorted(after - before)
+        if new_files:
+            result["extracted_files"] = [str(f) for f in new_files]
+        return result
     return {"ok": False, "error": "unzip not installed"}
 
 

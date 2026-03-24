@@ -87,9 +87,19 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
         snips["oledump_details"]= _snip_stdout(pre.get("mandatory_oledump_details"), 3000)
         snips["rtfobj_extract"] = _snip_stdout(pre.get("mandatory_rtfobj_extract"), 4000)
         snips["oleobj_extract"] = _snip_stdout(pre.get("mandatory_oleobj_extract"), 3000)
+        _ghidra_pes = pre.get("mandatory_ghidra_extracted_pes") or {}
+        if _ghidra_pes:
+            snips["ghidra_extracted_pes"] = "\n\n".join(
+                f"=== {name} ===\n{_snip_stdout(res, 3000)}" for name, res in _ghidra_pes.items()
+            )[:6000]
     elif kind == "office_openxml":
         snips["openxml_list"] = _snip_stdout(pre.get("mandatory_openxml_list"), 3000)
         snips["openxml_extract"] = _snip_stdout(pre.get("mandatory_openxml_extract"), 3000)
+        _ghidra_pes = pre.get("mandatory_ghidra_extracted_pes") or {}
+        if _ghidra_pes:
+            snips["ghidra_extracted_pes"] = "\n\n".join(
+                f"=== {name} ===\n{_snip_stdout(res, 3000)}" for name, res in _ghidra_pes.items()
+            )[:6000]
     elif kind == "msi":
         msi = pre.get("mandatory_msi_extract") or {}
         # Use the rich inventory from stdout if available, fall back to plain list

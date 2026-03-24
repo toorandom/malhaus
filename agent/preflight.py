@@ -27,6 +27,40 @@ except Exception:
     ghidra_headless_summary = None  # type: ignore
 
 
+def _ghidra_on_extracted_pes(
+    file_paths: list,
+    options: Dict[str, Any],
+    cb,
+    label: str = "",
+    cap: int = 3,
+) -> Dict[str, Any]:
+    """
+    Run ghidra_malhaus on any PE (MZ magic) files in file_paths.
+    Only runs when options["use_ghidra"] is set. Caps at `cap` files.
+    Returns {basename: ghidra_result}.
+    """
+    if not options.get("use_ghidra"):
+        return {}
+    results: Dict[str, Any] = {}
+    seen = 0
+    prefix = f"[{label}] " if label else ""
+    for fpath in file_paths:
+        if seen >= cap:
+            break
+        p = Path(fpath)
+        if not p.is_file():
+            continue
+        try:
+            with open(p, "rb") as _f:
+                if _f.read(2) != b"MZ":
+                    continue
+        except Exception:
+            continue
+        cb(f"{prefix}Ghidra: scanning extracted PE {p.name} (this takes a while…)")
+        results[p.name] = ghidra_malhaus(str(p))
+        seen += 1
+    return results
+
 
 def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=None) -> Dict[str, Any]:
     options = options or {}
@@ -97,12 +131,23 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         pre["mandatory_oleobj_extract"] = oleobj_extract(sample)
         pre["mandatory_rtfobj_extract"] = rtfobj_extract(sample)
         pre["mandatory_oledump_details"] = oledump_details(sample)
+        _office_pe_paths = (
+            list(pre["mandatory_oleobj_extract"].get("extracted_files") or []) +
+            list(pre["mandatory_rtfobj_extract"].get("extracted_files") or [])
+        )
+        _ghidra_office = _ghidra_on_extracted_pes(_office_pe_paths, options, cb)
+        if _ghidra_office:
+            pre["mandatory_ghidra_extracted_pes"] = _ghidra_office
 
     if kind == "office_openxml":
         cb("Listing OpenXML contents")
         pre["mandatory_openxml_list"] = openxml_list(sample)
         cb("Extracting OpenXML contents")
         pre["mandatory_openxml_extract"] = openxml_extract(sample)
+        _openxml_pe_paths = list(pre["mandatory_openxml_extract"].get("extracted_files") or [])
+        _ghidra_openxml = _ghidra_on_extracted_pes(_openxml_pe_paths, options, cb)
+        if _ghidra_openxml:
+            pre["mandatory_ghidra_extracted_pes"] = _ghidra_openxml
 
     if kind == "pe":
         cb("Authenticode verification")
@@ -296,12 +341,23 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 pre["mandatory_oleobj_extract"] = oleobj_extract(inner)
                 pre["mandatory_rtfobj_extract"] = rtfobj_extract(inner)
                 pre["mandatory_oledump_details"] = oledump_details(inner)
+                _office_pe_paths = (
+                    list(pre["mandatory_oleobj_extract"].get("extracted_files") or []) +
+                    list(pre["mandatory_rtfobj_extract"].get("extracted_files") or [])
+                )
+                _ghidra_office = _ghidra_on_extracted_pes(_office_pe_paths, options, cb, label=inner_name)
+                if _ghidra_office:
+                    pre["mandatory_ghidra_extracted_pes"] = _ghidra_office
 
             elif kind == "office_openxml":
                 cb(f"[{inner_name}] Listing OpenXML contents")
                 pre["mandatory_openxml_list"] = openxml_list(inner)
                 cb(f"[{inner_name}] Extracting OpenXML contents")
                 pre["mandatory_openxml_extract"] = openxml_extract(inner)
+                _openxml_pe_paths = list(pre["mandatory_openxml_extract"].get("extracted_files") or [])
+                _ghidra_openxml = _ghidra_on_extracted_pes(_openxml_pe_paths, options, cb, label=inner_name)
+                if _ghidra_openxml:
+                    pre["mandatory_ghidra_extracted_pes"] = _ghidra_openxml
 
             elif kind == "msi":
                 cb(f"[{inner_name}] 7z: extracting MSI contents")
