@@ -205,7 +205,32 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
     # If Ghidra ran in preflight, don't let the LLM re-call it
     if options and options.get("use_ghidra") and "mandatory_ghidra_malhaus" in pre:
         already_ran = already_ran | {"ghidra_malhaus"}
-    supplementary_registry = {k: v for k, v in TOOL_REGISTRY.items() if k not in already_ran}
+
+    # Only offer the LLM tools that make sense for the current file type.
+    # Prevents the LLM wasting its tool budget on irrelevant tools
+    # (e.g. calling script_content on a PE, or PE tools on an office doc).
+    _SUPPLEMENTARY_BY_KIND = {
+        "pe":            {"ssdeep_hash", "pe_overlay_info", "pe_imphash", "readpe_all", "pesec",
+                          "objdump_pe_headers", "objdump_pe_imports_dynamic",
+                          "radare2_quick_json", "radare2_entry_disasm", "ghidra_malhaus"},
+        "elf":           {"ssdeep_hash", "readelf_all", "objdump_elf_dynamic", "ldd_deps",
+                          "objdump_elf_disasm", "ghidra_malhaus"},
+        "office":        {"ssdeep_hash", "olevba_json", "oledump_list", "oledump_details",
+                          "oleobj_extract", "rtfobj_extract"},
+        "office_openxml":{"ssdeep_hash", "olevba_json", "oledump_list", "oledump_details",
+                          "openxml_list", "openxml_extract", "rtfobj_extract", "oleobj_extract"},
+        "pdf":           {"ssdeep_hash", "pdf_analysis"},
+        "lnk":           {"ssdeep_hash", "lnk_analysis", "exiftool_lnk", "lecmd_lnk"},
+        "msi":           {"ssdeep_hash", "msi_extract"},
+        "ps1":           {"ssdeep_hash", "script_content", "shell_lint"},
+        "vbs":           {"ssdeep_hash", "script_content"},
+        "hta":           {"ssdeep_hash", "script_content"},
+        "js":            {"ssdeep_hash", "script_content", "js_beautify"},
+        "shell":         {"ssdeep_hash", "script_content", "shell_lint"},
+    }
+    allowed = _SUPPLEMENTARY_BY_KIND.get(kind, set(TOOL_REGISTRY.keys()))
+    supplementary_registry = {k: v for k, v in TOOL_REGISTRY.items()
+                               if k not in already_ran and k in allowed}
     supplementary_catalog = tool_catalog(list(supplementary_registry.values()))
 
     verdict_raw, tool_results, llm_calls = run_llm_tool_loop(
