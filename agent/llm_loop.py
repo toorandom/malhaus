@@ -306,12 +306,19 @@ RULES:
                 ""
             )
             is_timeout = isinstance(last_exc, TimeoutError)
+            exc_name = type(last_exc).__name__
             llm_calls.append({
                 "iteration": iteration,
                 "prompt": last_human_fail[:80000],
                 "raw_output": f"{'TIMEOUT' if is_timeout else 'ERROR'} (attempt {_attempt + 1}/3): {last_exc}",
                 "failed": True,
             })
+
+            # BadRequestError (4xx) is a client-side error — retrying the identical
+            # request will always fail. Break immediately so we fall back to heuristics.
+            if "BadRequest" in exc_name or "invalid_argument" in str(last_exc).lower():
+                cb(f"LLM call #{iteration + 1} failed with {exc_name} (context too large or invalid request) — skipping retries")
+                break
 
             retry_delay = 5 * (_attempt + 1) if is_timeout else 2 * (_attempt + 1)
             cb(f"LLM call #{iteration + 1} {'timeout' if is_timeout else 'transient error'} "
@@ -399,10 +406,12 @@ RULES:
             # result and force the next LLM response to be the final verdict.
             if cache_key in tool_results:
                 cb(f"→ tool: {tool_name}{path_note} (cached — forcing verdict next)")
-                result_str = json.dumps(tool_results[cache_key], ensure_ascii=False)[:8000]
+                # Do NOT re-send the full result — the LLM already has it from the prior call.
+                # Only send the instruction to conclude; avoids doubling context size.
+                result_str = ""
                 cached_note = (
-                    "\n\n[SYSTEM: This tool was already called on this path and returned this result. "
-                    "No more tool calls are allowed. Your next response MUST be the final verdict JSON.]"
+                    "[SYSTEM: You already called this tool — result is in your context above. "
+                    "Your next response MUST be the final verdict JSON. No more tool calls.]"
                 )
                 _force_verdict = True
             else:
