@@ -103,6 +103,9 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
             snips["msi_largest_pe"] = msi["largest_pe"]
         if msi.get("pe_strings_preview"):
             snips["msi_pe_strings"] = msi["pe_strings_preview"][:4000]
+        snips["msi_authenticode"] = _snip_stdout(pre.get("mandatory_msi_authenticode"), 3000)
+        snips["msi_pe_headers"]   = _snip_stdout(pre.get("mandatory_msi_pe_headers"), 3000)
+        snips["msi_pe_entropy"]   = _snip_stdout(pre.get("mandatory_msi_pe_entropy"), 2000)
     elif kind in ("vbs", "hta", "ps1", "js", "shell"):
         snips["script_content"] = (pre.get("mandatory_script_content") or "")[:6000]
     return snips

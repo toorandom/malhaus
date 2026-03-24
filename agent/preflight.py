@@ -145,6 +145,15 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         pre["mandatory_msi_extract"] = msi
         if msi.get("pe_strings_preview"):
             pre["strings_preview"] = msi["pe_strings_preview"][:12000]
+        # Run mandatory PE analysis on the largest extracted PE
+        _msi_pe = msi.get("largest_pe")
+        if _msi_pe:
+            cb("MSI: authenticode verify on largest PE")
+            pre["mandatory_msi_authenticode"] = authenticode_verify(_msi_pe)
+            cb("MSI: PE headers on largest PE")
+            pre["mandatory_msi_pe_headers"] = objdump_pe_headers(_msi_pe)
+            cb("MSI: PE section entropy on largest PE")
+            pre["mandatory_msi_pe_entropy"] = pe_section_entropy(_msi_pe)
 
     if kind == "pdf":
         cb("PDF: keyword analysis")
@@ -272,6 +281,14 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 pre["mandatory_msi_extract"] = msi
                 if msi.get("pe_strings_preview"):
                     pre["strings_preview"] = msi["pe_strings_preview"][:12000]
+                _msi_pe = msi.get("largest_pe")
+                if _msi_pe:
+                    cb("MSI: authenticode verify on largest PE")
+                    pre["mandatory_msi_authenticode"] = authenticode_verify(_msi_pe)
+                    cb("MSI: PE headers on largest PE")
+                    pre["mandatory_msi_pe_headers"] = objdump_pe_headers(_msi_pe)
+                    cb("MSI: PE section entropy on largest PE")
+                    pre["mandatory_msi_pe_entropy"] = pe_section_entropy(_msi_pe)
 
             elif kind == "pdf":
                 cb("PDF: keyword analysis")
