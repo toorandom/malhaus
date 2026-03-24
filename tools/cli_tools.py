@@ -566,20 +566,63 @@ def oledump_details(path: str) -> Dict[str,Any]:
         return run_jailed([str(ole2), path], path, timeout=60, max_bytes=650000)
     return {"ok": False,"error": f"olemagic.sh not found at {ole2}"}
 
+def _rtfobj_parse_packages(stdout: str) -> Dict[str, str]:
+    """Parse rtfobj stdout to map hex offset → OLE Package original filename.
+    Returns dict like {"000AF79F": "license.js"}.
+    """
+    import re as _re
+    mapping: Dict[str, str] = {}
+    current_offset: str | None = None
+    for line in stdout.splitlines():
+        m = _re.search(r"\|([0-9A-Fa-f]+)h\s*\|", line)
+        if m:
+            current_offset = m.group(1).upper().zfill(8)
+        if current_offset and "Filename:" in line:
+            fn_m = _re.search(r"Filename:\s*'([^']+)'", line)
+            if fn_m:
+                mapping[current_offset] = fn_m.group(1)
+    return mapping
+
 @tool
 def rtfobj_extract(path: str) -> Dict[str, Any]:
     if which("rtfobj"):
         outdir = EXTRACT_DIR / "rtfobj"
         _safe_mkdir(outdir)
-        before = set(outdir.iterdir()) if outdir.exists() else set()
+        # Recursive scan before — rtfobj may write to subdirs
+        before = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
         result = run_jailed(["rtfobj", "-d", str(outdir), path], path, timeout=180, max_bytes=650000)
-        # List files newly written by this run so LLM knows exact paths for follow-up tools
-        after = set(outdir.iterdir()) if outdir.exists() else set()
-        new_files = sorted(str(f) for f in (after - before) if f.is_file())
+        after = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
+        new_files = sorted(after - before)
+
         if new_files:
-            result["extracted_files"] = new_files
+            # Try to rename rtf-object-XXXXXXXX.bin → original filename from OLE Package metadata
+            pkg_map = _rtfobj_parse_packages(result.get("stdout") or "")
+            renamed: list[str] = []
+            for f in new_files:
+                m = __import__("re").search(r"rtf-object-([0-9A-Fa-f]+)", f.name)
+                if m:
+                    offset = m.group(1).upper().zfill(8)
+                    orig_name = pkg_map.get(offset)
+                    if orig_name:
+                        dest = f.parent / orig_name
+                        try:
+                            f.rename(dest)
+                            renamed.append(str(dest))
+                        except Exception:
+                            renamed.append(str(f))
+                    else:
+                        renamed.append(str(f))
+                else:
+                    renamed.append(str(f))
+            result["extracted_files"] = renamed
             result["stdout"] = (result.get("stdout") or "") + (
-                "\n\n[Extracted files saved to disk:]\n" + "\n".join(new_files)
+                "\n\n[Extracted files saved to disk — use exact paths below with 'path' field:]\n"
+                + "\n".join(renamed)
+            )
+        else:
+            result["stdout"] = (result.get("stdout") or "") + (
+                "\n\n[No files were written to disk by rtfobj. "
+                "OLE object data is described above but not extractable to disk in this run.]"
             )
         return result
     return {"ok": False, "error": "rtfobj not installed (oletools)"}
