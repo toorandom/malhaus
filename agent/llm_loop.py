@@ -216,9 +216,10 @@ RULES:
     ]
 
     verdict: Optional[Dict[str, Any]] = None
+    _force_verdict = False  # set True after a cached-tool call to end the loop
 
     for iteration in range(max_tool_calls + 1):
-        is_last = (iteration == max_tool_calls)
+        is_last = (iteration == max_tool_calls) or _force_verdict
         if is_last:
             messages.append(HumanMessage(
                 content="You have reached the maximum tool calls. You MUST give your final verdict now. "
@@ -370,11 +371,15 @@ RULES:
             messages.append(AIMessage(content=raw))
 
             # Deduplicate: if this tool was already called, return cached result
-            # instead of running it again and wasting a tool call slot.
+            # and force the next LLM response to be the final verdict.
             if tool_name in tool_results:
-                cb(f"→ tool: {tool_name} (cached — already called)")
+                cb(f"→ tool: {tool_name} (cached — forcing verdict next)")
                 result_str = json.dumps(tool_results[tool_name], ensure_ascii=False)[:8000]
-                cached_note = "\n\n[NOTE: this tool was already called — returning cached result. Do not call it again.]"
+                cached_note = (
+                    "\n\n[SYSTEM: This tool was already called and returned this result. "
+                    "No more tool calls are allowed. Your next response MUST be the final verdict JSON.]"
+                )
+                _force_verdict = True
             else:
                 cb(f"→ tool: {tool_name}")
                 cached_note = ""
