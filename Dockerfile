@@ -3,14 +3,14 @@ FROM ubuntu:24.04
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
-    JAVA_HOME=/usr/lib/jvm/java-21-current
+    JAVA_HOME=/usr/lib/jvm/java-21-current \
+    PATH="/app/.venv/bin:$PATH"
 
 # ── System packages ───────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip python3-dev \
     build-essential \
     file binutils \
-    yara ssdeep \
     zip unzip curl git \
     jq \
     elfutils \

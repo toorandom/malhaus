@@ -369,21 +369,30 @@ RULES:
             tool_name = parsed.get("tool", "")
             messages.append(AIMessage(content=raw))
 
-            cb(f"→ tool: {tool_name}")
-            if tool_name in tool_registry:
-                try:
-                    result = tool_registry[tool_name](sample_path)
-                    tool_results[tool_name] = result
-                    result_str = json.dumps(result, ensure_ascii=False)[:8000]
-                except Exception as e:
-                    result_str = json.dumps({"error": str(e)})
+            # Deduplicate: if this tool was already called, return cached result
+            # instead of running it again and wasting a tool call slot.
+            if tool_name in tool_results:
+                cb(f"→ tool: {tool_name} (cached — already called)")
+                result_str = json.dumps(tool_results[tool_name], ensure_ascii=False)[:8000]
+                cached_note = "\n\n[NOTE: this tool was already called — returning cached result. Do not call it again.]"
             else:
-                result_str = json.dumps({"error": f"unknown tool '{tool_name}'"})
+                cb(f"→ tool: {tool_name}")
+                cached_note = ""
+                if tool_name in tool_registry:
+                    try:
+                        result = tool_registry[tool_name](sample_path)
+                        tool_results[tool_name] = result
+                        result_str = json.dumps(result, ensure_ascii=False)[:8000]
+                    except Exception as e:
+                        result_str = json.dumps({"error": str(e)})
+                else:
+                    result_str = json.dumps({"error": f"unknown tool '{tool_name}'"})
 
             remaining = max_tool_calls - iteration - 1
             messages.append(HumanMessage(
                 content=f"Tool '{tool_name}' result:\n{result_str}\n\n"
                         f"({remaining} tool call{'s' if remaining != 1 else ''} remaining)"
+                        f"{cached_note}"
             ))
             continue
 
