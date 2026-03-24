@@ -340,6 +340,10 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
     cb("Generating visualizations")
     visualizations = compute_visualizations(tool_sample, model=MODEL_VERDICT, progress_cb=cb)
 
+    # Flat sorted list of every tool that ran: mandatory preflight + LLM-called supplementary
+    _supplementary_used = sorted({k.split("::")[0] for k in tool_results})
+    tools_used = sorted(already_ran) + [t for t in _supplementary_used if t not in already_ran]
+
     return {
         "sample": sample,
         "promoted_sample": tool_sample if tool_sample != sample else None,
@@ -348,6 +352,7 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "evidence_pack": evidence_pack,
         "heuristics": heuristics,
         "tool_results": tool_results,
+        "tools_used": tools_used,
         "llm_calls": llm_calls,
         "verdict": verdict,
         "byte_heatmap_b64": heatmap.get("b64") if heatmap.get("ok") else None,

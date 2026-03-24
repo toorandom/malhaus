@@ -117,6 +117,16 @@
       {% else %}
         <div class="muted">No reasons returned.</div>
       {% endif %}
+
+      {% set tools = result.get('tools_used', []) %}
+      {% if tools %}
+      <h3>Tools used for verdict</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;">
+        {% for t in tools %}
+          <span class="pill mono" style="font-size:11px;">{{ t }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
     </section>
 
     <section class="card">
