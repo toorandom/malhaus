@@ -130,6 +130,7 @@ def run_llm_tool_loop(
     llm_calls: List[Dict[str, Any]] = []
     strings_score = int((strings_llm or {}).get("strings_score", 0) or 0)
     _thinking_disabled = False
+    _content_filter_fired = False  # tracks if any tool result was blocked by content filter
 
     tool_catalog_block = "(no tools)"
     if tool_catalog:
@@ -319,16 +320,20 @@ RULES:
             # that was blocked. Strip that message from context and retry with a note —
             # the LLM can still produce a verdict based on metadata from earlier calls.
             if "content_filter" in exc_str.lower() or "content management policy" in exc_str.lower():
-                cb(f"LLM call #{iteration + 1} blocked by content filter — removing filtered content and retrying with metadata-only context")
-                # Remove the last HumanMessage (the tool result that triggered the filter)
+                _content_filter_fired = True
+                cb(f"LLM call #{iteration + 1} blocked by content filter — content is likely malicious; retrying with metadata-only context")
+                # Replace the last HumanMessage (the tool result that triggered the filter)
+                # with a note that explicitly frames the filter hit as a malicious indicator.
                 for _i in range(len(messages) - 1, -1, -1):
                     if isinstance(messages[_i], HumanMessage):
                         messages[_i] = HumanMessage(
-                            content="[SYSTEM: The previous tool result contained content that was blocked by the "
-                                    "provider content filter (likely malicious code in a script/payload). "
-                                    "You must produce the final verdict now based on all metadata and tool outputs "
-                                    "available earlier in this conversation. No more tool calls.]\n\n"
-                                    f"({max_tool_calls - iteration - 1} tool calls remaining — but do NOT use them, give verdict now)"
+                            content="[SYSTEM: The previous tool result was BLOCKED by the provider content filter. "
+                                    "A content filter block on a tool output is itself a strong indicator that the "
+                                    "file contains malicious or dangerous code (e.g. shellcode, exploit, dropper JS). "
+                                    "You MUST treat this as evidence of malicious intent in your verdict. "
+                                    "risk_level must be at least 'suspicious' — likely 'likely_malware'. "
+                                    "Produce the final verdict JSON now based on all metadata available earlier. "
+                                    "No more tool calls.]"
                         )
                         break
                 last_exc = None  # allow the retry loop to continue with cleaned context
@@ -500,5 +505,17 @@ RULES:
         verdict["top_reasons"].append(
             f"Enforced: strings_score={strings_score} so risk_level cannot be unknown."
         )
+
+    # If the content filter fired on any tool result, the content itself was flagged as
+    # harmful — that is a strong malicious signal. Enforce at least 'suspicious'.
+    _RISK_ORDER = ["unknown", "benign", "suspicious", "likely_malware", "malware"]
+    if _content_filter_fired:
+        current_risk = verdict.get("risk_level", "unknown")
+        if _RISK_ORDER.index(current_risk) < _RISK_ORDER.index("suspicious"):
+            verdict["risk_level"] = "suspicious"
+            verdict.setdefault("top_reasons", []).insert(
+                0, "Tool output was blocked by provider content filter — the file contains content "
+                   "flagged as dangerous/malicious by the AI safety system."
+            )
 
     return verdict, tool_results, llm_calls
