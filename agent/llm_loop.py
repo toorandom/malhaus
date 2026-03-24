@@ -161,7 +161,7 @@ FILE-TYPE GUIDANCE:
 - pe: Check authenticode_verify_head for signature status (VERIFIED=signed, NO SIGNATURE=unsigned). Examine imports for suspicious API patterns (VirtualAlloc, WriteProcessMemory, CreateRemoteThread, etc.). High section entropy = packed/encrypted.
 - elf: Check dynamic imports, POSIX syscalls, network functions, dropped file paths.
 - lnk: Windows Shortcut files are a common malware delivery vector. ALWAYS call exiftool_lnk and lecmd_lnk (if available) to obtain structured target path, arguments, working directory, and metadata before reaching a verdict.
-- office/office_openxml: Check olevba for VBA macros, AutoOpen/AutoExec triggers, Shell/WScript calls, base64 blobs, external URL references. If openxml_extract reveals embedded .rtf files, run rtfobj_extract with "path" set to the extracted RTF path. When rtfobj_extract output includes a "[Extracted files saved to disk:]" section, run script_content or js_beautify (for .js/.vbs/.ps1 files) or strings_ascii (for binaries) on EACH extracted file using its exact listed path in the "path" field — this is mandatory, not optional. If it reveals embedded .pdf files, run pdf_analysis on them. If it reveals .exe/.dll, run strings_ascii on them.
+- office/office_openxml: Check olevba for VBA macros, AutoOpen/AutoExec triggers, Shell/WScript calls, base64 blobs, external URL references. If openxml_extract reveals embedded .rtf files, run rtfobj_extract with "path" set to the extracted RTF path. When rtfobj_extract output includes a "[Extracted files saved to disk:]" section, run script_content or js_beautify (for .js/.vbs/.ps1 files) or strings_ascii (for binaries) on EACH listed path — this is mandatory. NEVER call script_content on .rtf, .docx, .doc, .xlsx, .zip, or any binary container file — those are not text scripts and will produce garbage output. Only call script_content on plain text script files (.js, .vbs, .ps1, .hta, .sh, .bat). If it reveals embedded .pdf files, run pdf_analysis on them. If it reveals .exe/.dll, run strings_ascii on them.
 - msi: The msi_inventory shows ALL extracted files with type, size, and entropy. Use the "path" field to run targeted tools on suspicious files — e.g. strings_ascii/objdump_pe_headers/pe_section_entropy on high-entropy PEs, authenticode_verify on any signed PE. Analyze ALL PEs, not just the largest — MSI droppers often hide payloads in secondary files.
 - pdf: Check for /JavaScript, /OpenAction, /Launch, /EmbeddedFile, suspicious URI streams.
 - ps1/vbs/hta/js/shell: Script files — analyse content directly. Obfuscation, encoded payloads, downloads, persistence = malicious.
@@ -378,6 +378,7 @@ RULES:
             # Resolve target path — LLM may specify an inner file via "path"
             import os as _os
             requested_path = parsed.get("path", "").strip()
+            path_invalid = False
             if requested_path and requested_path != sample_path:
                 # Validate: must be an existing file with no path traversal
                 real = _os.path.realpath(requested_path)
@@ -385,7 +386,7 @@ RULES:
                     target_path = real
                 else:
                     target_path = sample_path
-                    requested_path = ""  # signal validation failed
+                    path_invalid = True  # path specified but file not found
             else:
                 target_path = sample_path
                 requested_path = ""
@@ -406,10 +407,10 @@ RULES:
                 _force_verdict = True
             else:
                 cached_note = ""
-                if requested_path and target_path == sample_path:
-                    # Path was specified but failed validation
-                    result_str = json.dumps({"error": f"path not found or not allowed: {parsed.get('path')}"})
-                    cb(f"→ tool: {tool_name} (invalid path rejected)")
+                if path_invalid:
+                    # Path was specified but file not found — return error, do NOT run on sample_path
+                    result_str = json.dumps({"error": f"path not found or not allowed: {requested_path}. Check rtfobj_extract output for the correct extracted file paths."})
+                    cb(f"→ tool: {tool_name} (invalid path rejected: {requested_path})")
                 elif tool_name in tool_registry:
                     cb(f"→ tool: {tool_name}{path_note}")
                     try:
