@@ -66,12 +66,15 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
             "r2_imports_head": _snip_stdout(pre.get("mandatory_radare2_info"), 4000),
             "r2_entry_head": _snip_stdout(pre.get("mandatory_radare2_entry"), 3000),
             "section_entropy": _fmt_section_entropy(pre),
+            "dotnet_analysis": _snip_stdout(pre.get("mandatory_dotnet_analysis"), 4000),
+            "binwalk": _snip_stdout(pre.get("mandatory_binwalk"), 3000),
         })
     elif kind == "elf":
         snips.update({
             "readelf_head": _snip_stdout(pre.get("mandatory_readelf_all"), 4000),
             "objdump_p_head": _snip_stdout(pre.get("mandatory_objdump_elf_dynamic"), 4000),
             "ldd_head": _snip_stdout(pre.get("mandatory_ldd_deps"), 2000),
+            "binwalk": _snip_stdout(pre.get("mandatory_binwalk"), 3000),
         })
     elif kind == "lnk":
         snips["lnk_analysis"] = _snip_stdout(pre.get("mandatory_lnk_analysis"), 6000)
@@ -227,6 +230,10 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "hta":           {"ssdeep_hash", "script_content"},
         "js":            {"ssdeep_hash", "script_content", "js_beautify"},
         "shell":         {"ssdeep_hash", "script_content", "shell_lint"},
+        # Archive that could not be promoted — let LLM try extracting
+        "archive":       {"ssdeep_hash", "archive_extract"},
+        # Unknown type — offer generic inspection tools only
+        "unknown":       {"ssdeep_hash", "file_info", "strings_ascii", "entropy_shannon"},
     }
     allowed = _SUPPLEMENTARY_BY_KIND.get(kind, set(TOOL_REGISTRY.keys()))
     supplementary_registry = {k: v for k, v in TOOL_REGISTRY.items()
