@@ -14,7 +14,7 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 
 ## Features
 
-- PE, ELF, Office (OLE/OpenXML), PDF, PowerShell, shell script, JavaScript
+- PE, ELF, Office (OLE/OpenXML), PDF, PowerShell, shell script, JavaScript, **JAR/WAR/EAR** (Java)
 - Supports **Gemini, OpenAI, Azure AI Foundry, Claude, DeepSeek**, and any OpenAI-compatible server (Ollama, vLLM, LM Studio)
 - REST API with Bearer token authentication and per-key rate limiting
 - MCP server — AI agents (Claude, Cursor, Continue…) can call `analyze` natively

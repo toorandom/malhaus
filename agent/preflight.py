@@ -17,6 +17,7 @@ from tools.cli_tools import (
     pe_section_entropy,
     dotnet_analysis,
     binwalk_scan,
+    jar_manifest, jarsigner_verify, jar_class_list, javap_disasm, jar_extract_inner,
 )
 
 # Optional custom tools (won't break if not installed/enabled)
@@ -168,6 +169,18 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         cb("LNK: parsing shortcut")
         pre["mandatory_lnk_analysis"] = lnk_analysis(sample)
 
+    if kind == "jar":
+        cb("JAR: reading MANIFEST.MF")
+        pre["mandatory_jar_manifest"] = jar_manifest(sample)
+        cb("JAR: listing class files and resources")
+        pre["mandatory_jar_class_list"] = jar_class_list(sample)
+        cb("JAR: verifying signature (jarsigner)")
+        pre["mandatory_jarsigner_verify"] = jarsigner_verify(sample)
+        cb("JAR: extracting and inventorying inner files")
+        pre["mandatory_jar_extract"] = jar_extract_inner(sample)
+        cb("JAR: disassembling classes (javap)")
+        pre["mandatory_javap_disasm"] = javap_disasm(sample)
+
     if kind in ("vbs", "hta"):
         cb("Reading script content")
         try:
@@ -308,6 +321,18 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
             elif kind == "lnk":
                 cb(f"[{inner_name}] LNK: parsing shortcut")
                 pre["mandatory_lnk_analysis"] = lnk_analysis(inner)
+
+            elif kind == "jar":
+                cb(f"[{inner_name}] JAR: reading MANIFEST.MF")
+                pre["mandatory_jar_manifest"] = jar_manifest(inner)
+                cb(f"[{inner_name}] JAR: listing class files")
+                pre["mandatory_jar_class_list"] = jar_class_list(inner)
+                cb(f"[{inner_name}] JAR: verifying signature")
+                pre["mandatory_jarsigner_verify"] = jarsigner_verify(inner)
+                cb(f"[{inner_name}] JAR: extracting inner files")
+                pre["mandatory_jar_extract"] = jar_extract_inner(inner)
+                cb(f"[{inner_name}] JAR: disassembling classes (javap)")
+                pre["mandatory_javap_disasm"] = javap_disasm(inner)
 
             elif kind in ("vbs", "hta", "ps1", "shell", "js"):
                 cb(f"[{inner_name}] Reading {kind} script content")

@@ -126,6 +126,8 @@ def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
         return "vbs"
     if ext == ".hta":
         return "hta"
+    if ext == ".jar" or "java archive" in s or (ext == ".war") or (ext == ".ear"):
+        return "jar"
     if ext in (".zip",) or "zip archive" in s:
         return "archive"
     if ext in (".7z",) or "7-zip archive" in s:
@@ -1343,6 +1345,216 @@ def byte_heatmap(path: str) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+# ─────────────────────────── JAR / Java ──────────────────────────────────────
+
+@tool
+def jar_manifest(path: str) -> Dict[str, Any]:
+    """
+    Extract META-INF/MANIFEST.MF from a JAR/WAR/EAR archive.
+    Returns the Main-Class, Class-Path, permissions, and other manifest entries.
+    Key indicators: Main-Class (entry point), unusual permissions, signed/unsigned.
+    """
+    result = run(["unzip", "-p", path, "META-INF/MANIFEST.MF"], timeout=30, max_bytes=65536)
+    if not result.get("stdout", "").strip():
+        # Try alternate manifest locations (WAR/EAR)
+        result2 = run(["unzip", "-p", path, "WEB-INF/MANIFEST.MF"], timeout=15, max_bytes=65536)
+        if result2.get("stdout", "").strip():
+            return result2
+        result["stdout"] = result.get("stdout", "") + "\n[No MANIFEST.MF found]"
+    return result
+
+
+@tool
+def jarsigner_verify(path: str) -> Dict[str, Any]:
+    """
+    Verify JAR signature with jarsigner. Reports whether the JAR is signed,
+    which certificates signed it, and whether the signature is valid or tampered.
+    Unsigned JARs are common in malware; tampered signatures indicate injection.
+    """
+    return run(["jarsigner", "-verify", "-verbose", "-certs", path], timeout=60, max_bytes=200000)
+
+
+@tool
+def jar_class_list(path: str) -> Dict[str, Any]:
+    """
+    List all files inside a JAR/WAR/EAR archive with sizes.
+    Shows .class files (Java bytecode), resources, embedded JARs, scripts,
+    and native libraries (.so/.dll). Large .class files or nested JARs are suspicious.
+    """
+    return run(["unzip", "-l", path], timeout=30, max_bytes=200000)
+
+
+@tool
+def javap_disasm(path: str) -> Dict[str, Any]:
+    """
+    Disassemble Java .class files found inside a JAR using javap.
+    Extracts the JAR, identifies the Main-Class from MANIFEST.MF and any other
+    suspicious classes (names containing Payload, Loader, Dropper, Exploit, Agent,
+    Inject, Shell, Backdoor, C2, Remote), then disassembles up to 5 classes.
+    Shows bytecode instructions, method signatures, constant pool strings — reveals
+    Runtime.exec(), socket connections, reflection, file I/O, and base64 decode calls.
+    """
+    import math as _math
+    from collections import Counter as _Counter
+
+    p = Path(path)
+    outdir = EXTRACT_DIR / f"jar_{p.stem}_{abs(hash(path)) % 100000}"
+    _safe_mkdir(outdir)
+
+    # Extract JAR contents
+    extract_result = run(["unzip", "-o", "-d", str(outdir), path], timeout=60, max_bytes=200000)
+    if not extract_result.get("ok") and not list(outdir.rglob("*.class")):
+        return {"ok": False, "error": "JAR extraction failed", "stdout": "", "stderr": extract_result.get("stderr", "")}
+
+    # Parse Main-Class from MANIFEST.MF
+    main_class = None
+    manifest_path = outdir / "META-INF" / "MANIFEST.MF"
+    if manifest_path.is_file():
+        try:
+            for line in manifest_path.read_text(errors="replace").splitlines():
+                if line.startswith("Main-Class:"):
+                    main_class = line.split(":", 1)[1].strip().replace(".", "/")
+                    break
+        except Exception:
+            pass
+
+    # Find all .class files
+    all_classes = sorted(outdir.rglob("*.class"))
+    if not all_classes:
+        return {"ok": False, "error": "No .class files found in JAR", "stdout": extract_result.get("stdout", ""), "stderr": ""}
+
+    # Prioritize: main class first, then suspicious names, then first few
+    _SUSPICIOUS_PATTERNS = re.compile(
+        r"(payload|loader|dropper|exploit|agent|inject|shell|backdoor|c2|remote|"
+        r"stager|launcher|download|execute|runtime|reflect|obfusc|decode|decrypt|"
+        r"install|persist|hook|bypass|elevat|priv|escalat)",
+        re.IGNORECASE,
+    )
+    main_class_file = None
+    if main_class:
+        candidate = outdir / (main_class + ".class")
+        if candidate.is_file():
+            main_class_file = candidate
+
+    suspicious = [f for f in all_classes if _SUSPICIOUS_PATTERNS.search(f.name) and f != main_class_file]
+    rest = [f for f in all_classes if f != main_class_file and f not in suspicious]
+
+    priority_list: list[Path] = []
+    if main_class_file:
+        priority_list.append(main_class_file)
+    priority_list.extend(suspicious[:3])
+    priority_list.extend(rest[: max(0, 5 - len(priority_list))])
+    targets = priority_list[:5]
+
+    # Disassemble each target class
+    parts: list[str] = [
+        f"Disassembled {len(targets)} of {len(all_classes)} classes "
+        f"(main={main_class or 'unknown'}, suspicious={len(suspicious)}, total={len(all_classes)}):\n"
+    ]
+    for cls_file in targets:
+        rel = cls_file.relative_to(outdir)
+        parts.append(f"\n{'='*60}\n[{rel}]\n{'='*60}")
+        result = run(["javap", "-c", "-p", "-verbose", str(cls_file)], timeout=30, max_bytes=40000)
+        parts.append(result.get("stdout", "") or result.get("stderr", "") or "(no output)")
+
+    combined = "\n".join(parts)
+    return {
+        "ok": True,
+        "stdout": combined[:200000],
+        "stderr": "",
+        "rc": 0,
+        "total_classes": len(all_classes),
+        "main_class": main_class,
+        "suspicious_class_count": len(suspicious),
+        "disassembled": [str(t.relative_to(outdir)) for t in targets],
+    }
+
+
+@tool
+def jar_extract_inner(path: str) -> Dict[str, Any]:
+    """
+    Extract a JAR/WAR/EAR and inventory all inner files with type, size, and entropy.
+    Identifies embedded PE/ELF binaries, nested JARs, scripts (.js, .sh, .bat, .ps1),
+    native libraries (.so, .dll), and configuration files.
+    Use the 'path' field on follow-up tool calls to analyze any suspicious inner file.
+    """
+    import math as _math
+    from collections import Counter as _Counter
+
+    def _quick_entropy(fpath: str) -> float:
+        try:
+            with open(fpath, "rb") as _f:
+                data = _f.read(65536)
+            if not data:
+                return 0.0
+            freq = _Counter(data)
+            n = len(data)
+            return -sum((c / n) * _math.log2(c / n) for c in freq.values())
+        except Exception:
+            return 0.0
+
+    p = Path(path)
+    outdir = EXTRACT_DIR / f"jar_{p.stem}_{abs(hash(path)) % 100000}"
+    _safe_mkdir(outdir)
+
+    result = run(["unzip", "-o", "-d", str(outdir), path], timeout=60, max_bytes=200000)
+
+    # Walk extracted files
+    _PE_MAGIC = b"MZ"
+    _ELF_MAGIC = b"\x7fELF"
+    _INTERESTING_EXTS = {".jar", ".war", ".ear", ".js", ".sh", ".bat", ".ps1",
+                         ".vbs", ".hta", ".py", ".rb", ".php", ".so", ".dll", ".exe"}
+
+    files_info = []
+    for f in sorted(outdir.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            size = f.stat().st_size
+            with open(f, "rb") as _fh:
+                magic = _fh.read(4)
+        except Exception:
+            continue
+
+        ftype = "other"
+        if magic[:2] == _PE_MAGIC:
+            ftype = "pe"
+        elif magic[:4] == _ELF_MAGIC:
+            ftype = "elf"
+        elif f.suffix.lower() in _INTERESTING_EXTS:
+            ftype = f.suffix.lower().lstrip(".")
+        elif f.suffix.lower() == ".class":
+            ftype = "class"
+
+        entry = {
+            "path": str(f),
+            "name": f.name,
+            "size": size,
+            "type": ftype,
+        }
+        if ftype in ("pe", "elf") or (ftype not in ("class", "other") and size > 1024):
+            entry["entropy"] = round(_quick_entropy(str(f)), 3)
+        if ftype in ("pe", "elf", "jar", "war", "ear") or f.suffix.lower() in _INTERESTING_EXTS:
+            files_info.append(entry)
+
+    lines = [f"Extracted {outdir}:"]
+    for fi in files_info:
+        ent_str = f"  entropy={fi.get('entropy', '?')}" if "entropy" in fi else ""
+        lines.append(f"  [{fi['type']:8}] {fi['name']:40}  {fi['size']:>10} bytes{ent_str}  path={fi['path']}")
+
+    if not files_info:
+        lines.append("  (no interesting files found — only .class and resources)")
+
+    return {
+        "ok": True,
+        "stdout": "\n".join(lines),
+        "stderr": "",
+        "rc": 0,
+        "extracted_files": files_info,
+        "extract_dir": str(outdir),
+    }
+
+
 ALL_TOOLS = [
     # universal
     file_info, sha256, ssdeep_hash, entropy_shannon, strings_ascii, extract_payloads, authenticode_verify,
@@ -1369,6 +1581,9 @@ ALL_TOOLS = [
 
     # new file types
     pdf_analysis, lnk_analysis, exiftool_lnk, lecmd_lnk, archive_extract,
+
+    # JAR / Java
+    jar_manifest, jarsigner_verify, jar_class_list, javap_disasm, jar_extract_inner,
 ]
 
 

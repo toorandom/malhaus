@@ -125,6 +125,12 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
             snips["msi_pe_analysis"] = "\n\n".join(pe_snip_parts)[:6000]
     elif kind in ("vbs", "hta", "ps1", "js", "shell"):
         snips["script_content"] = (pre.get("mandatory_script_content") or "")[:6000]
+    elif kind == "jar":
+        snips["jar_manifest"]       = _snip_stdout(pre.get("mandatory_jar_manifest"), 3000)
+        snips["jarsigner_verify"]   = _snip_stdout(pre.get("mandatory_jarsigner_verify"), 4000)
+        snips["jar_class_list"]     = _snip_stdout(pre.get("mandatory_jar_class_list"), 4000)
+        snips["jar_extract_inner"]  = _snip_stdout(pre.get("mandatory_jar_extract"), 4000)
+        snips["javap_disasm"]       = _snip_stdout(pre.get("mandatory_javap_disasm"), 6000)
     return snips
 
 def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None) -> Dict[str, Any]:
@@ -227,6 +233,8 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "pdf":   {"pdf_analysis", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
         "lnk":   {"lnk_analysis", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
         "msi":   {"msi_extract", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
+        "jar":   {"jar_manifest", "jarsigner_verify", "jar_class_list", "jar_extract_inner", "javap_disasm",
+                  "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
     }
     already_ran = _MANDATORY_BY_KIND.get(kind, {"entropy_shannon", "sha256", "file_info", "strings_ascii", "extract_payloads"})
     # If Ghidra ran in preflight, don't let the LLM re-call it
@@ -255,6 +263,9 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
                           "objdump_pe_headers", "objdump_pe_imports_dynamic",
                           "pe_section_entropy", "readpe_all", "pesec",
                           "authenticode_verify"},
+        "jar":           {"ssdeep_hash", "jar_manifest", "jarsigner_verify", "jar_class_list",
+                          "javap_disasm", "jar_extract_inner",
+                          "strings_ascii", "entropy_shannon", "binwalk_scan"},
         "ps1":           {"ssdeep_hash", "script_content", "shell_lint"},
         "vbs":           {"ssdeep_hash", "script_content"},
         "hta":           {"ssdeep_hash", "script_content"},
