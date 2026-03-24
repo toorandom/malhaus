@@ -128,16 +128,42 @@ def _content_filter_final_verdict(
     """
     cb = progress_cb or (lambda msg: None)
 
-    # Summarise tool_results as key metadata only (no raw file content)
+    # Summarise tool_results as key metadata only — no raw file content.
+    # Script/content tools (script_content, js_beautify) are the ones that triggered
+    # the filter; skip their content entirely but note they were called and filtered.
+    # For structural analysis tools (rtfobj_extract, oledump, etc.) extract key signals.
+    _CONTENT_TOOLS = {"script_content", "js_beautify", "strings_ascii", "floss_strings"}
+    _SIGNAL_RE = re.compile(
+        r"(Filename:\s*'[^']+'|EXECUTABLE FILE|CVE-\d{4}-\d+|class name:.*|"
+        r"Possibly an exploit|OLE Package|AutoOpen|AutoExec|Shell|WScript|"
+        r"CreateObject|powershell|cmd\.exe|\.exe|\.dll|\.js|\.vbs|"
+        r"format_id:.*Embedded|data size:\s*\d+|MD5\s*=\s*[0-9a-fA-F]+)",
+        re.IGNORECASE,
+    )
+
     tool_findings: list[str] = []
     for key, result in (tool_results or {}).items():
         tool_name = key.split("::")[0]
+        file_label = key.split("::")[-1] if "::" in key else ""
         if not isinstance(result, dict):
             continue
+        if tool_name in _CONTENT_TOOLS:
+            # Don't send file content — note it was called and filtered
+            label = f" on {file_label}" if file_label else ""
+            tool_findings.append(
+                f"- {tool_name}{label}: [content blocked by provider content filter — "
+                "this strongly indicates the file contains dangerous/malicious code]"
+            )
+            continue
         stdout = (result.get("stdout") or "")
-        # Keep first 300 chars of stdout — enough for metadata, not enough for content filter
-        snippet = stdout[:300].replace("\n", " ").strip()
-        if snippet:
+        # Extract signal lines (filenames, CVEs, EXECUTABLE flags, etc.)
+        signals = _SIGNAL_RE.findall(stdout)
+        if signals:
+            sig_str = " | ".join(dict.fromkeys(s.strip() for s in signals[:15]))
+            tool_findings.append(f"- {tool_name}: {sig_str}")
+        elif stdout:
+            # Fall back to first 300 chars if no signal lines matched
+            snippet = stdout[:300].replace("\n", " ").strip()
             tool_findings.append(f"- {tool_name}: {snippet}")
 
     tool_block = "\n".join(tool_findings) if tool_findings else "(no tool results)"
