@@ -314,9 +314,30 @@ RULES:
                 "failed": True,
             })
 
+            exc_str = str(last_exc)
+            # Azure/OpenAI content filter: the last tool result contained malware content
+            # that was blocked. Strip that message from context and retry with a note —
+            # the LLM can still produce a verdict based on metadata from earlier calls.
+            if "content_filter" in exc_str.lower() or "content management policy" in exc_str.lower():
+                cb(f"LLM call #{iteration + 1} blocked by content filter — removing filtered content and retrying with metadata-only context")
+                # Remove the last HumanMessage (the tool result that triggered the filter)
+                for _i in range(len(messages) - 1, -1, -1):
+                    if isinstance(messages[_i], HumanMessage):
+                        messages[_i] = HumanMessage(
+                            content="[SYSTEM: The previous tool result contained content that was blocked by the "
+                                    "provider content filter (likely malicious code in a script/payload). "
+                                    "You must produce the final verdict now based on all metadata and tool outputs "
+                                    "available earlier in this conversation. No more tool calls.]\n\n"
+                                    f"({max_tool_calls - iteration - 1} tool calls remaining — but do NOT use them, give verdict now)"
+                        )
+                        break
+                last_exc = None  # allow the retry loop to continue with cleaned context
+                _time.sleep(1)
+                continue
+
             # BadRequestError (4xx) is a client-side error — retrying the identical
             # request will always fail. Break immediately so we fall back to heuristics.
-            if "BadRequest" in exc_name or "invalid_argument" in str(last_exc).lower():
+            if "BadRequest" in exc_name or "invalid_argument" in exc_str.lower():
                 cb(f"LLM call #{iteration + 1} failed with {exc_name} (context too large or invalid request) — skipping retries")
                 break
 
@@ -331,6 +352,13 @@ RULES:
             cb(f"LLM call #{iteration + 1} failed after all retries — using heuristic fallback")
             _reason = "timeout" if isinstance(last_exc, TimeoutError) else "parse_failed"
             verdict = _ui_safe_fallback(kind, heuristics, f"all_retries_failed: {last_exc}", reason=_reason)
+            break
+
+        if resp is None:
+            # Content filter cleared last_exc but also exhausted all attempts —
+            # fall back to heuristic rather than crash trying to process None.
+            cb(f"LLM call #{iteration + 1} — no response after content filter retries — using heuristic fallback")
+            verdict = _ui_safe_fallback(kind, heuristics, "content_filter_all_attempts", reason="parse_failed")
             break
 
         _elapsed = _time.time() - _t0
