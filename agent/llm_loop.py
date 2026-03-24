@@ -324,6 +324,16 @@ RULES:
     verdict: Optional[Dict[str, Any]] = None
     _force_verdict = False  # set True after a cached-tool call to end the loop
 
+    # Detect containers whose inner files MUST be analysed before a verdict is accepted.
+    # Key: tool name that must appear in tool_results; value: human-readable reason.
+    _required_tools: Dict[str, str] = {}
+    if kind == "office_openxml":
+        _ctx = initial_context.lower()
+        if ".rtf" in _ctx:
+            _required_tools["rtfobj_extract"] = (
+                "openxml package contains embedded .rtf file(s) — rtfobj_extract MUST be called first"
+            )
+
     for iteration in range(max_tool_calls + 1):
         is_last = (iteration == max_tool_calls) or _force_verdict
         if is_last:
@@ -544,6 +554,21 @@ RULES:
             break
 
         if parsed.get("action") == "final" or is_last:
+            # Programmatic guard: reject the verdict if required tools haven't been called yet.
+            # The LLM sometimes returns a verdict on call #1 ignoring mandatory tool guidance.
+            if not is_last and _required_tools:
+                missing = [tool for tool in _required_tools if not any(
+                    k.startswith(tool + "::") or k == tool for k in tool_results
+                )]
+                if missing:
+                    messages.append(AIMessage(content=raw))
+                    reasons = "; ".join(_required_tools[t] for t in missing)
+                    messages.append(HumanMessage(
+                        content=f"[SYSTEM: Verdict rejected — you must call these tools first: {', '.join(missing)}. "
+                                f"Reason: {reasons}. Call them now before giving the final verdict.]"
+                    ))
+                    cb(f"Verdict rejected — missing required tools: {', '.join(missing)}")
+                    continue
             verdict = parsed
             break
 
