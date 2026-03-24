@@ -147,6 +147,10 @@ TOOL CALLING:
 You may call up to {max_tool_calls} tools to gather more evidence before giving your verdict.
 To call a tool respond with STRICT JSON:
   {{"action":"call_tool","tool":"<tool_name>","reason":"<why you need it>"}}
+To run a tool on an inner/extracted file instead of the main sample, add an optional "path" field
+with the absolute path you want to analyse (e.g. an RTF found inside a DOCX, a PE found inside an archive):
+  {{"action":"call_tool","tool":"rtfobj_extract","path":"/app/extracted/.../word/anage.rtf","reason":"analyse embedded RTF"}}
+Only use "path" for files you have already seen in a previous tool result. Do not guess paths.
 When you have enough evidence OR have used all tool calls, give your final verdict:
   {{"action":"final","file_type":"{kind}","risk_level":"benign|suspicious|likely_malware|unknown","confidence":0-100,"top_reasons":[...],"iocs":{{"urls":[],"domains":[],"ips":[],"emails":[],"registry_paths":[],"file_paths":[],"mutexes":[],"scheduled_tasks":[],"powershell_commands":[]}},"suspicious_strings":[{{"line":"...","why":"...","tags":["..."]}}],"embedded_payloads":[],"next_steps":[]}}
 
@@ -157,7 +161,7 @@ FILE-TYPE GUIDANCE:
 - pe: Check authenticode_verify_head for signature status (VERIFIED=signed, NO SIGNATURE=unsigned). Examine imports for suspicious API patterns (VirtualAlloc, WriteProcessMemory, CreateRemoteThread, etc.). High section entropy = packed/encrypted.
 - elf: Check dynamic imports, POSIX syscalls, network functions, dropped file paths.
 - lnk: Windows Shortcut files are a common malware delivery vector. ALWAYS call exiftool_lnk and lecmd_lnk (if available) to obtain structured target path, arguments, working directory, and metadata before reaching a verdict.
-- office/office_openxml: Check olevba for VBA macros, AutoOpen/AutoExec triggers, Shell/WScript calls, base64 blobs, external URL references.
+- office/office_openxml: Check olevba for VBA macros, AutoOpen/AutoExec triggers, Shell/WScript calls, base64 blobs, external URL references. If openxml_extract reveals embedded .rtf files, run rtfobj_extract with "path" set to the extracted RTF path. If it reveals embedded .pdf files, run pdf_analysis on them. If it reveals .exe/.dll, run strings_ascii on them.
 - pdf: Check for /JavaScript, /OpenAction, /Launch, /EmbeddedFile, suspicious URI streams.
 - ps1/vbs/hta/js/shell: Script files — analyse content directly. Obfuscation, encoded payloads, downloads, persistence = malicious.
 
@@ -370,23 +374,46 @@ RULES:
             tool_name = parsed.get("tool", "")
             messages.append(AIMessage(content=raw))
 
-            # Deduplicate: if this tool was already called, return cached result
-            # and force the next LLM response to be the final verdict.
-            if tool_name in tool_results:
-                cb(f"→ tool: {tool_name} (cached — forcing verdict next)")
-                result_str = json.dumps(tool_results[tool_name], ensure_ascii=False)[:8000]
+            # Resolve target path — LLM may specify an inner file via "path"
+            import os as _os
+            requested_path = parsed.get("path", "").strip()
+            if requested_path and requested_path != sample_path:
+                # Validate: must be an existing file with no path traversal
+                real = _os.path.realpath(requested_path)
+                if ".." not in requested_path and _os.path.isfile(real):
+                    target_path = real
+                else:
+                    target_path = sample_path
+                    requested_path = ""  # signal validation failed
+            else:
+                target_path = sample_path
+                requested_path = ""
+
+            # Cache key includes path so tool(inner.rtf) != tool(sample.docx)
+            cache_key = f"{tool_name}::{target_path}"
+            path_note = f" on {_os.path.basename(target_path)}" if target_path != sample_path else ""
+
+            # Deduplicate: if this exact (tool, path) was already called, return cached
+            # result and force the next LLM response to be the final verdict.
+            if cache_key in tool_results:
+                cb(f"→ tool: {tool_name}{path_note} (cached — forcing verdict next)")
+                result_str = json.dumps(tool_results[cache_key], ensure_ascii=False)[:8000]
                 cached_note = (
-                    "\n\n[SYSTEM: This tool was already called and returned this result. "
+                    "\n\n[SYSTEM: This tool was already called on this path and returned this result. "
                     "No more tool calls are allowed. Your next response MUST be the final verdict JSON.]"
                 )
                 _force_verdict = True
             else:
-                cb(f"→ tool: {tool_name}")
                 cached_note = ""
-                if tool_name in tool_registry:
+                if requested_path and target_path == sample_path:
+                    # Path was specified but failed validation
+                    result_str = json.dumps({"error": f"path not found or not allowed: {parsed.get('path')}"})
+                    cb(f"→ tool: {tool_name} (invalid path rejected)")
+                elif tool_name in tool_registry:
+                    cb(f"→ tool: {tool_name}{path_note}")
                     try:
-                        result = tool_registry[tool_name](sample_path)
-                        tool_results[tool_name] = result
+                        result = tool_registry[tool_name](target_path)
+                        tool_results[cache_key] = result
                         result_str = json.dumps(result, ensure_ascii=False)[:8000]
                     except Exception as e:
                         result_str = json.dumps({"error": str(e)})
@@ -394,8 +421,9 @@ RULES:
                     result_str = json.dumps({"error": f"unknown tool '{tool_name}'"})
 
             remaining = max_tool_calls - iteration - 1
+            path_label = f" [on {_os.path.basename(target_path)}]" if target_path != sample_path else ""
             messages.append(HumanMessage(
-                content=f"Tool '{tool_name}' result:\n{result_str}\n\n"
+                content=f"Tool '{tool_name}'{path_label} result:\n{result_str}\n\n"
                         f"({remaining} tool call{'s' if remaining != 1 else ''} remaining)"
                         f"{cached_note}"
             ))
