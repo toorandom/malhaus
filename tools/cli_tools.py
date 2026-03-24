@@ -571,7 +571,17 @@ def rtfobj_extract(path: str) -> Dict[str, Any]:
     if which("rtfobj"):
         outdir = EXTRACT_DIR / "rtfobj"
         _safe_mkdir(outdir)
-        return run_jailed(["rtfobj", "-d", str(outdir), path], path, timeout=180, max_bytes=650000)
+        before = set(outdir.iterdir()) if outdir.exists() else set()
+        result = run_jailed(["rtfobj", "-d", str(outdir), path], path, timeout=180, max_bytes=650000)
+        # List files newly written by this run so LLM knows exact paths for follow-up tools
+        after = set(outdir.iterdir()) if outdir.exists() else set()
+        new_files = sorted(str(f) for f in (after - before) if f.is_file())
+        if new_files:
+            result["extracted_files"] = new_files
+            result["stdout"] = (result.get("stdout") or "") + (
+                "\n\n[Extracted files saved to disk:]\n" + "\n".join(new_files)
+            )
+        return result
     return {"ok": False, "error": "rtfobj not installed (oletools)"}
 
 @tool

@@ -223,9 +223,11 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "elf":           {"ssdeep_hash", "readelf_all", "objdump_elf_dynamic", "ldd_deps",
                           "objdump_elf_disasm", "ghidra_malhaus"},
         "office":        {"ssdeep_hash", "olevba_json", "oledump_list", "oledump_details",
-                          "oleobj_extract", "rtfobj_extract"},
+                          "oleobj_extract", "rtfobj_extract",
+                          "script_content", "js_beautify", "strings_ascii", "entropy_shannon"},
         "office_openxml":{"ssdeep_hash", "olevba_json", "oledump_list", "oledump_details",
-                          "openxml_list", "openxml_extract", "rtfobj_extract", "oleobj_extract"},
+                          "openxml_list", "openxml_extract", "rtfobj_extract", "oleobj_extract",
+                          "script_content", "js_beautify", "strings_ascii", "entropy_shannon"},
         "pdf":           {"ssdeep_hash", "pdf_analysis"},
         "lnk":           {"ssdeep_hash", "lnk_analysis", "exiftool_lnk", "lecmd_lnk"},
         # MSI: LLM uses path field to run PE tools on any extracted file
