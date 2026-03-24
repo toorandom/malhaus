@@ -321,9 +321,10 @@ RULES:
             # the LLM can still produce a verdict based on metadata from earlier calls.
             if "content_filter" in exc_str.lower() or "content management policy" in exc_str.lower():
                 _content_filter_fired = True
-                cb(f"LLM call #{iteration + 1} blocked by content filter — content is likely malicious; retrying with metadata-only context")
-                # Replace the last HumanMessage (the tool result that triggered the filter)
-                # with a note that explicitly frames the filter hit as a malicious indicator.
+                cb(f"LLM call #{iteration + 1} blocked by content filter — content is likely malicious; scheduling fresh verdict call")
+                # Replace the last HumanMessage with a note that frames the filter as a
+                # malicious indicator, then break the attempt loop cleanly so the outer
+                # iteration loop gives a FRESH LLM call (not a retry attempt) for the verdict.
                 for _i in range(len(messages) - 1, -1, -1):
                     if isinstance(messages[_i], HumanMessage):
                         messages[_i] = HumanMessage(
@@ -336,9 +337,9 @@ RULES:
                                     "No more tool calls.]"
                         )
                         break
-                last_exc = None  # allow the retry loop to continue with cleaned context
-                _time.sleep(1)
-                continue
+                last_exc = None
+                _force_verdict = True  # ensure next outer iteration is a final verdict call
+                break  # exit attempt loop — outer loop will run a fresh LLM call
 
             # BadRequestError (4xx) is a client-side error — retrying the identical
             # request will always fail. Break immediately so we fall back to heuristics.
@@ -360,10 +361,14 @@ RULES:
             break
 
         if resp is None:
-            # Content filter cleared last_exc but also exhausted all attempts —
-            # fall back to heuristic rather than crash trying to process None.
-            cb(f"LLM call #{iteration + 1} — no response after content filter retries — using heuristic fallback")
-            verdict = _ui_safe_fallback(kind, heuristics, "content_filter_all_attempts", reason="parse_failed")
+            if _content_filter_fired:
+                # Content filter fired — messages are cleaned, _force_verdict=True.
+                # Continue outer loop for a fresh verdict LLM call (not heuristic fallback).
+                cb(f"LLM call #{iteration + 1} — content filter handled; running fresh verdict call")
+                continue
+            # Genuine case: no response and no content filter — fall back to heuristic.
+            cb(f"LLM call #{iteration + 1} — no response — using heuristic fallback")
+            verdict = _ui_safe_fallback(kind, heuristics, "no_response", reason="parse_failed")
             break
 
         _elapsed = _time.time() - _t0
