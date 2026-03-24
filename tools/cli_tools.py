@@ -555,7 +555,8 @@ def oleobj_extract(path: str) -> Dict[str, Any]:
     if which("oleobj"):
         outdir = EXTRACT_DIR / "oleobj"
         _safe_mkdir(outdir)
-        return run_jailed(["oleobj", "-d", str(outdir), path], path, timeout=180, max_bytes=650000)
+        # Use run() not run_jailed(): firejail whitelist blocks writes to extracted dir.
+        return run(["oleobj", "-d", str(outdir), path], timeout=180, max_bytes=650000)
     return {"ok": False, "error": "oleobj not installed (oletools)"}
 
 
@@ -590,7 +591,9 @@ def rtfobj_extract(path: str) -> Dict[str, Any]:
         _safe_mkdir(outdir)
         # Recursive scan before — rtfobj may write to subdirs
         before = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
-        result = run_jailed(["rtfobj", "-d", str(outdir), path], path, timeout=180, max_bytes=650000)
+        # Use run() not run_jailed(): firejail whitelist blocks writes to extracted dir.
+        # rtfobj is a Python analysis tool (oletools) — it parses structure, does not execute code.
+        result = run(["rtfobj", "-d", str(outdir), path], timeout=180, max_bytes=650000)
         after = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
         new_files = sorted(after - before)
 
