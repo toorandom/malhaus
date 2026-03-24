@@ -126,6 +126,11 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
                     dn_snip = _snip_stdout(dotnet, 1500)
                     if dn_snip:
                         parts.append(f"[dotnet_analysis]\n{dn_snip}")
+                ghidra = pe_data.get("ghidra_malhaus")
+                if ghidra:
+                    gh_snip = _snip_stdout(ghidra, 2000)
+                    if gh_snip:
+                        parts.append(f"[ghidra]\n{gh_snip}")
                 pe_snip_parts.append("\n".join(parts))
             snips["msi_pe_analysis"] = "\n\n".join(pe_snip_parts)[:6000]
     elif kind in ("vbs", "hta", "ps1", "js", "shell"):

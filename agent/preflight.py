@@ -165,6 +165,9 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
             if not (_dotnet.get("error", "").startswith("Not a .NET PE") or
                     _dotnet.get("error", "").startswith("dnfile")):
                 _pe_entry["dotnet_analysis"] = _dotnet
+            if options.get("use_ghidra"):
+                cb(f"MSI: Ghidra full scan on {_pe_name} (this takes a while…)")
+                _pe_entry["ghidra_malhaus"] = ghidra_malhaus(_pe_path)
             pre["mandatory_msi_pe_analysis"][_pe_name] = _pe_entry
 
     if kind == "pdf":
@@ -324,6 +327,9 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                     if not (_dotnet.get("error", "").startswith("Not a .NET PE") or
                             _dotnet.get("error", "").startswith("dnfile")):
                         _pe_entry["dotnet_analysis"] = _dotnet
+                    if options.get("use_ghidra"):
+                        cb(f"[{inner_name}] MSI: Ghidra full scan on {_pe_name} (this takes a while…)")
+                        _pe_entry["ghidra_malhaus"] = ghidra_malhaus(_pe_path)
                     pre["mandatory_msi_pe_analysis"][_pe_name] = _pe_entry
 
             elif kind == "pdf":
