@@ -130,7 +130,8 @@ def run_llm_tool_loop(
     llm_calls: List[Dict[str, Any]] = []
     strings_score = int((strings_llm or {}).get("strings_score", 0) or 0)
     _thinking_disabled = False
-    _content_filter_fired = False  # tracks if any tool result was blocked by content filter
+    _content_filter_fired = False   # tracks if any tool result was blocked by content filter
+    _content_filter_count = 0       # number of times filter has fired (cap retries)
 
     tool_catalog_block = "(no tools)"
     if tool_catalog:
@@ -321,22 +322,29 @@ RULES:
             # the LLM can still produce a verdict based on metadata from earlier calls.
             if "content_filter" in exc_str.lower() or "content management policy" in exc_str.lower():
                 _content_filter_fired = True
+                _content_filter_count += 1
                 cb(f"LLM call #{iteration + 1} blocked by content filter — content is likely malicious; scheduling fresh verdict call")
-                # Replace the last HumanMessage with a note that frames the filter as a
-                # malicious indicator, then break the attempt loop cleanly so the outer
-                # iteration loop gives a FRESH LLM call (not a retry attempt) for the verdict.
-                for _i in range(len(messages) - 1, -1, -1):
+
+                if _content_filter_count >= 2:
+                    # Still firing after stripping — give up and use heuristic with filter signal
+                    cb(f"Content filter fired {_content_filter_count}x — falling back to heuristic verdict")
+                    last_exc = RuntimeError(f"content_filter_repeated_{_content_filter_count}x")
+                    break
+
+                # Strip ALL tool-result HumanMessages from context — not just the last one.
+                # The offensive content may be in any prior tool result (e.g. script_content).
+                _filter_note = (
+                    "[SYSTEM: Tool result was BLOCKED by provider content filter — "
+                    "file contains malicious/dangerous code. "
+                    "risk_level must be at least 'suspicious' (likely 'likely_malware'). "
+                    "Produce the final verdict JSON now. No more tool calls.]"
+                )
+                for _i in range(len(messages)):
                     if isinstance(messages[_i], HumanMessage):
-                        messages[_i] = HumanMessage(
-                            content="[SYSTEM: The previous tool result was BLOCKED by the provider content filter. "
-                                    "A content filter block on a tool output is itself a strong indicator that the "
-                                    "file contains malicious or dangerous code (e.g. shellcode, exploit, dropper JS). "
-                                    "You MUST treat this as evidence of malicious intent in your verdict. "
-                                    "risk_level must be at least 'suspicious' — likely 'likely_malware'. "
-                                    "Produce the final verdict JSON now based on all metadata available earlier. "
-                                    "No more tool calls.]"
-                        )
-                        break
+                        c = messages[_i].content if isinstance(messages[_i].content, str) else ""
+                        if c.startswith("Tool '") or c.startswith("[SYSTEM:"):
+                            messages[_i] = HumanMessage(content=_filter_note)
+
                 last_exc = None
                 _force_verdict = True  # ensure next outer iteration is a final verdict call
                 break  # exit attempt loop — outer loop will run a fresh LLM call
@@ -361,12 +369,12 @@ RULES:
             break
 
         if resp is None:
-            if _content_filter_fired:
-                # Content filter fired — messages are cleaned, _force_verdict=True.
+            if _content_filter_fired and last_exc is None:
+                # Content filter fired once, messages cleaned, _force_verdict=True.
                 # Continue outer loop for a fresh verdict LLM call (not heuristic fallback).
                 cb(f"LLM call #{iteration + 1} — content filter handled; running fresh verdict call")
                 continue
-            # Genuine case: no response and no content filter — fall back to heuristic.
+            # Either genuine failure or content filter gave up after max retries.
             cb(f"LLM call #{iteration + 1} — no response — using heuristic fallback")
             verdict = _ui_safe_fallback(kind, heuristics, "no_response", reason="parse_failed")
             break
