@@ -145,15 +145,20 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         pre["mandatory_msi_extract"] = msi
         if msi.get("pe_strings_preview"):
             pre["strings_preview"] = msi["pe_strings_preview"][:12000]
-        # Run mandatory PE analysis on the largest extracted PE
-        _msi_pe = msi.get("largest_pe")
-        if _msi_pe:
-            cb("MSI: authenticode verify on largest PE")
-            pre["mandatory_msi_authenticode"] = authenticode_verify(_msi_pe)
-            cb("MSI: PE headers on largest PE")
-            pre["mandatory_msi_pe_headers"] = objdump_pe_headers(_msi_pe)
-            cb("MSI: PE section entropy on largest PE")
-            pre["mandatory_msi_pe_entropy"] = pe_section_entropy(_msi_pe)
+        # Run mandatory PE analysis on ALL extracted PE/ELF files (cap at 5)
+        _msi_pes = [f["path"] for f in (msi.get("pe_files") or []) if f.get("path")][:5]
+        if not _msi_pes and msi.get("largest_pe"):
+            _msi_pes = [msi["largest_pe"]]
+        pre["mandatory_msi_pe_analysis"] = {}
+        for _pe_path in _msi_pes:
+            _pe_name = Path(_pe_path).name
+            cb(f"MSI: authenticode/headers/entropy on {_pe_name}")
+            pre["mandatory_msi_pe_analysis"][_pe_name] = {
+                "path": _pe_path,
+                "authenticode": authenticode_verify(_pe_path),
+                "pe_headers":   objdump_pe_headers(_pe_path),
+                "pe_entropy":   pe_section_entropy(_pe_path),
+            }
 
     if kind == "pdf":
         cb("PDF: keyword analysis")
@@ -187,21 +192,22 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         inner_kind = arc.get("promoted_kind")
 
         if inner and inner_kind and Path(inner).is_file():
+            inner_name = Path(inner).name
             depth = arc.get("nesting_depth", 0)
             depth_note = f" (nested {depth} level{'s' if depth != 1 else ''} deep)" if depth > 0 else ""
-            cb(f"{inner_kind.upper()} found inside archive{depth_note} — promoting to full {inner_kind} analysis")
+            cb(f"{inner_kind.upper()} found inside archive{depth_note}: {inner_name} — promoting to full {inner_kind} analysis")
             pre["effective_sample"] = inner
             pre["container_kind"] = "archive"
 
             # UPX check for PE/ELF before anything else
             if inner_kind in ("pe", "elf"):
-                cb(f"Checking extracted {inner_kind.upper()} for UPX")
+                cb(f"[{inner_name}] Checking for UPX packing")
                 if upx_detect(inner):
                     pre["upx_packed"] = True
-                    cb("Unpacking UPX from extracted file")
+                    cb(f"[{inner_name}] Unpacking UPX")
                     pre["upx_unpack"] = upx_unpack(inner)
                     if (pre["upx_unpack"] or {}).get("ok"):
-                        cb("Re-detecting after UPX unpack")
+                        cb(f"[{inner_name}] Re-detecting file type after UPX unpack")
                         fi_post = file_info(inner)
                         kind_post = guess_kind_from_fileinfo(fi_post.get("stdout", ""), inner)
                         if kind_post not in ("unknown", ""):
@@ -213,93 +219,98 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
             pre["kind"] = kind
 
             # Recompute entropy and strings on the promoted file
-            cb(f"Computing entropy of extracted {kind}")
+            cb(f"[{inner_name}] Computing entropy")
             pre["entropy"] = entropy_shannon(inner)
 
             if kind in ("pe", "elf"):
-                cb("FLOSS: deobfuscating strings in extracted file")
+                cb(f"[{inner_name}] FLOSS: deobfuscating strings")
                 floss_result = floss_strings(inner)
                 if (floss_result.get("stdout") or "").strip():
                     pre["floss_result"] = floss_result
-            cb("Extracting strings from extracted file")
+            cb(f"[{inner_name}] Extracting strings")
             pre["strings_preview"] = (strings_ascii(inner).get("stdout", "") or "")[:12000]
 
             # Run the appropriate analysis for the promoted kind
             if kind == "pe":
-                cb("Authenticode verification (extracted PE)")
+                cb(f"[{inner_name}] Authenticode verification")
                 pre["authenticode_verify"] = authenticode_verify(inner)
-                cb("objdump: PE headers/sections")
+                cb(f"[{inner_name}] objdump: PE headers/sections")
                 pre["mandatory_objdump_pe_headers"] = objdump_pe_headers(inner)
-                cb("objdump: PE imports")
+                cb(f"[{inner_name}] objdump: PE imports")
                 pre["mandatory_objdump_pe_dynamic"] = objdump_pe_imports_dynamic(inner)
-                cb("radare2: analysis")
+                cb(f"[{inner_name}] radare2: analysis")
                 pre["mandatory_radare2_info"] = radare2_quick_json(inner)
-                cb("radare2: entry disasm")
+                cb(f"[{inner_name}] radare2: entry disasm")
                 pre["mandatory_radare2_entry"] = radare2_entry_disasm(inner)
-                cb("PE section entropy")
+                cb(f"[{inner_name}] PE section entropy")
                 pre["mandatory_pe_section_entropy"] = pe_section_entropy(inner)
-                cb(".NET metadata analysis")
+                cb(f"[{inner_name}] .NET metadata analysis")
                 pre["mandatory_dotnet_analysis"] = dotnet_analysis(inner)
-                cb("binwalk: embedded signature scan")
+                cb(f"[{inner_name}] binwalk: embedded signature scan")
                 pre["mandatory_binwalk"] = binwalk_scan(inner)
                 if options.get("use_ghidra"):
-                    cb("Ghidra: full scan of extracted PE…")
+                    cb(f"[{inner_name}] Ghidra: full scan (this takes a while…)")
                     pre["mandatory_ghidra_malhaus"] = ghidra_malhaus(inner)
 
             elif kind == "elf":
-                cb("readelf: full headers")
+                cb(f"[{inner_name}] readelf: full headers")
                 pre["mandatory_readelf_all"] = readelf_all(inner)
-                cb("objdump: ELF dynamic section")
+                cb(f"[{inner_name}] objdump: ELF dynamic section")
                 pre["mandatory_objdump_elf_dynamic"] = objdump_elf_dynamic(inner)
-                cb("ldd: shared library deps")
+                cb(f"[{inner_name}] ldd: shared library deps")
                 pre["mandatory_ldd_deps"] = ldd_deps(inner)
-                cb("binwalk: embedded signature scan")
+                cb(f"[{inner_name}] binwalk: embedded signature scan")
                 pre["mandatory_binwalk"] = binwalk_scan(inner)
                 if options.get("use_ghidra"):
-                    cb("Ghidra: full scan of extracted ELF…")
+                    cb(f"[{inner_name}] Ghidra: full scan (this takes a while…)")
                     pre["mandatory_ghidra_malhaus"] = ghidra_malhaus(inner)
 
             elif kind == "office":
-                cb("oledump: listing streams")
+                cb(f"[{inner_name}] oledump: listing streams")
                 pre["mandatory_oledump_list"] = oledump_list(inner)
-                cb("olevba: extracting VBA")
+                cb(f"[{inner_name}] olevba: extracting VBA")
                 pre["mandatory_olevba_json"] = olevba_json(inner)
-                cb("oleobj: extracting objects")
+                cb(f"[{inner_name}] oleobj: extracting objects")
                 pre["mandatory_oleobj_extract"] = oleobj_extract(inner)
                 pre["mandatory_rtfobj_extract"] = rtfobj_extract(inner)
                 pre["mandatory_oledump_details"] = oledump_details(inner)
 
             elif kind == "office_openxml":
-                cb("Listing OpenXML contents")
+                cb(f"[{inner_name}] Listing OpenXML contents")
                 pre["mandatory_openxml_list"] = openxml_list(inner)
-                cb("Extracting OpenXML contents")
+                cb(f"[{inner_name}] Extracting OpenXML contents")
                 pre["mandatory_openxml_extract"] = openxml_extract(inner)
 
             elif kind == "msi":
-                cb("7z: extracting MSI contents")
+                cb(f"[{inner_name}] 7z: extracting MSI contents")
                 msi = msi_extract(inner)
                 pre["mandatory_msi_extract"] = msi
                 if msi.get("pe_strings_preview"):
                     pre["strings_preview"] = msi["pe_strings_preview"][:12000]
-                _msi_pe = msi.get("largest_pe")
-                if _msi_pe:
-                    cb("MSI: authenticode verify on largest PE")
-                    pre["mandatory_msi_authenticode"] = authenticode_verify(_msi_pe)
-                    cb("MSI: PE headers on largest PE")
-                    pre["mandatory_msi_pe_headers"] = objdump_pe_headers(_msi_pe)
-                    cb("MSI: PE section entropy on largest PE")
-                    pre["mandatory_msi_pe_entropy"] = pe_section_entropy(_msi_pe)
+                _msi_pes = [f["path"] for f in (msi.get("pe_files") or []) if f.get("path")][:5]
+                if not _msi_pes and msi.get("largest_pe"):
+                    _msi_pes = [msi["largest_pe"]]
+                pre["mandatory_msi_pe_analysis"] = {}
+                for _pe_path in _msi_pes:
+                    _pe_name = Path(_pe_path).name
+                    cb(f"[{inner_name}] MSI: authenticode/headers/entropy on {_pe_name}")
+                    pre["mandatory_msi_pe_analysis"][_pe_name] = {
+                        "path": _pe_path,
+                        "authenticode": authenticode_verify(_pe_path),
+                        "pe_headers":   objdump_pe_headers(_pe_path),
+                        "pe_entropy":   pe_section_entropy(_pe_path),
+                    }
 
             elif kind == "pdf":
-                cb("PDF: keyword analysis")
+                cb(f"[{inner_name}] PDF: keyword analysis")
                 pre["mandatory_pdf_analysis"] = pdf_analysis(inner)
 
             elif kind == "lnk":
-                cb("LNK: parsing shortcut")
+                cb(f"[{inner_name}] LNK: parsing shortcut")
                 pre["mandatory_lnk_analysis"] = lnk_analysis(inner)
 
             elif kind in ("vbs", "hta", "ps1", "shell", "js"):
-                cb(f"Reading {kind} script content")
+                cb(f"[{inner_name}] Reading {kind} script content")
                 try:
                     pre["mandatory_script_content"] = Path(inner).read_text(errors="replace")[:20000]
                 except Exception as e:

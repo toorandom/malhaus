@@ -104,9 +104,25 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
             snips["msi_largest_pe"] = msi["largest_pe"]
         if msi.get("pe_strings_preview"):
             snips["msi_pe_strings"] = msi["pe_strings_preview"][:4000]
-        snips["msi_authenticode"] = _snip_stdout(pre.get("mandatory_msi_authenticode"), 3000)
-        snips["msi_pe_headers"]   = _snip_stdout(pre.get("mandatory_msi_pe_headers"), 3000)
-        snips["msi_pe_entropy"]   = _snip_stdout(pre.get("mandatory_msi_pe_entropy"), 2000)
+        msi_pe_analysis = pre.get("mandatory_msi_pe_analysis") or {}
+        if msi_pe_analysis:
+            pe_snip_parts = []
+            for pe_name, pe_data in msi_pe_analysis.items():
+                parts = [f"=== {pe_name} ({pe_data.get('path', '')}) ==="]
+                auth = _snip_stdout(pe_data.get("authenticode"), 1500)
+                if auth: parts.append(f"[authenticode]\n{auth}")
+                hdrs = _snip_stdout(pe_data.get("pe_headers"), 1500)
+                if hdrs: parts.append(f"[pe_headers]\n{hdrs}")
+                ent = pe_data.get("pe_entropy") or {}
+                sections = ent.get("sections")
+                if sections:
+                    sec_lines = []
+                    for s in sections:
+                        flag = " *** HIGH ENTROPY ***" if s.get("suspicious") else ""
+                        sec_lines.append(f"  {s['name']:<12} entropy={s['entropy']:.4f}{flag}")
+                    parts.append(f"[pe_entropy]\n" + "\n".join(sec_lines))
+                pe_snip_parts.append("\n".join(parts))
+            snips["msi_pe_analysis"] = "\n\n".join(pe_snip_parts)[:6000]
     elif kind in ("vbs", "hta", "ps1", "js", "shell"):
         snips["script_content"] = (pre.get("mandatory_script_content") or "")[:6000]
     return snips

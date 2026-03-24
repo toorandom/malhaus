@@ -364,7 +364,14 @@ RULES:
             len((m.content if isinstance(m.content, str) else json.dumps(m.content)).encode("utf-8"))
             for m in messages
         )
-        cb(f"LLM call #{iteration + 1} — {payload_bytes:,} bytes in context")
+        _n_tool_results = len(tool_results)
+        if is_last:
+            _call_desc = "forced final verdict"
+        elif iteration == 0:
+            _call_desc = f"initial verdict ({kind}, {len(tool_registry)} tools available)"
+        else:
+            _call_desc = f"follow-up after {_n_tool_results} tool result{'s' if _n_tool_results != 1 else ''}"
+        cb(f"LLM call #{iteration + 1} — {_call_desc} — {payload_bytes:,} bytes")
         import time as _time
         import threading as _threading
         import config as _config
