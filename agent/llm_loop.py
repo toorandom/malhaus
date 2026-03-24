@@ -111,6 +111,78 @@ def _ui_safe_fallback(kind: str, heuristics: Dict[str, Any], raw: str, reason: s
     }
 
 
+def _content_filter_final_verdict(
+    model: str,
+    kind: str,
+    heuristics: Dict[str, Any],
+    strings_llm: Dict[str, Any],
+    evidence_pack: Dict[str, Any],
+    tool_results: Dict[str, Any],
+    progress_cb=None,
+) -> Optional[Dict[str, Any]]:
+    """
+    When Azure content filter blocks all normal verdict calls, build a minimal
+    metadata-only prompt (no file content) and make one final clean LLM call.
+    Uses only structured facts: heuristics, strings summary, tool names + key findings.
+    Returns parsed verdict dict or None if this also fails.
+    """
+    cb = progress_cb or (lambda msg: None)
+
+    # Summarise tool_results as key metadata only (no raw file content)
+    tool_findings: list[str] = []
+    for key, result in (tool_results or {}).items():
+        tool_name = key.split("::")[0]
+        if not isinstance(result, dict):
+            continue
+        stdout = (result.get("stdout") or "")
+        # Keep first 300 chars of stdout — enough for metadata, not enough for content filter
+        snippet = stdout[:300].replace("\n", " ").strip()
+        if snippet:
+            tool_findings.append(f"- {tool_name}: {snippet}")
+
+    tool_block = "\n".join(tool_findings) if tool_findings else "(no tool results)"
+    h_score  = heuristics.get("score", 0)
+    h_hint   = heuristics.get("risk_hint", "unknown")
+    sl_risk  = (strings_llm or {}).get("strings_risk_level", "unknown")
+    sl_sum   = (strings_llm or {}).get("summary", "")[:600]
+    sl_ev    = "\n".join(
+        f"- {e.get('tag','')}: {e.get('description','')[:120]}"
+        for e in ((strings_llm or {}).get("evidence") or [])[:8]
+    )
+
+    prompt = f"""You are a malware analyst. Produce a final verdict JSON for the file described below.
+
+IMPORTANT: The previous analysis session was interrupted because the provider content filter
+blocked tool output — this is itself a strong indicator that the file contains malicious code.
+risk_level MUST be at least "suspicious" (likely "likely_malware").
+
+File type: {kind}
+Heuristic score: {h_score}/100  hint: {h_hint}
+Strings analysis risk: {sl_risk}
+Strings summary: {sl_sum}
+Strings evidence:
+{sl_ev}
+
+Tool findings (metadata only):
+{tool_block}
+
+Content filter signal: provider content filter blocked analysis of an embedded payload —
+this indicates the file contains dangerous/exploit/dropper code.
+
+Return ONLY this JSON (no markdown):
+{{"action":"final","file_type":"{kind}","risk_level":"benign|suspicious|likely_malware|malware","confidence":0-100,"top_reasons":["..."],"iocs":{{"urls":[],"domains":[],"ips":[],"emails":[],"registry_paths":[],"file_paths":[],"mutexes":[],"scheduled_tasks":[],"powershell_commands":[]}},"suspicious_strings":[],"embedded_payloads":[],"next_steps":[]}}"""
+
+    cb("LLM: content-filter-safe final verdict call (metadata only)…")
+    try:
+        llm = get_llm(model)
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        raw = resp.content if isinstance(resp.content, str) else json.dumps(resp.content)
+        return _parse_any_json_object(raw)
+    except Exception as e:
+        cb(f"Content-filter-safe verdict call also failed: {e}")
+        return None
+
+
 def run_llm_tool_loop(
     model: str,
     sample_path: str,
@@ -326,8 +398,29 @@ RULES:
                 cb(f"LLM call #{iteration + 1} blocked by content filter — content is likely malicious; scheduling fresh verdict call")
 
                 if _content_filter_count >= 2:
-                    # Still firing after stripping — give up and use heuristic with filter signal
-                    cb(f"Content filter fired {_content_filter_count}x — falling back to heuristic verdict")
+                    # Still firing after stripping — try one final content-safe LLM call
+                    # with ONLY metadata (no file content), then fall to heuristic if that fails.
+                    cb(f"Content filter fired {_content_filter_count}x — trying metadata-only verdict call")
+                    _cf_verdict = _content_filter_final_verdict(
+                        model=model, kind=kind, heuristics=heuristics,
+                        strings_llm=strings_llm, evidence_pack=evidence_pack,
+                        tool_results=tool_results, progress_cb=cb,
+                    )
+                    if _cf_verdict is not None:
+                        verdict = _cf_verdict
+                        # Ensure minimum risk level since filter fired
+                        _RISK_ORDER_CF = ["unknown", "benign", "suspicious", "likely_malware", "malware"]
+                        if _RISK_ORDER_CF.index(verdict.get("risk_level","unknown")) < _RISK_ORDER_CF.index("suspicious"):
+                            verdict["risk_level"] = "suspicious"
+                        verdict.setdefault("top_reasons", []).insert(
+                            0, "Provider content filter blocked analysis of embedded payload — file contains dangerous/malicious code."
+                        )
+                    else:
+                        cb(f"Metadata-only verdict also failed — using heuristic fallback")
+                        verdict = _ui_safe_fallback(kind, heuristics, f"content_filter_{_content_filter_count}x", reason="parse_failed")
+                        verdict.setdefault("top_reasons", []).insert(
+                            0, "Provider content filter blocked analysis of embedded payload — file contains dangerous/malicious code."
+                        )
                     last_exc = RuntimeError(f"content_filter_repeated_{_content_filter_count}x")
                     break
 
@@ -361,6 +454,9 @@ RULES:
             _time.sleep(retry_delay)
 
         if last_exc is not None:
+            if verdict is not None:
+                # Verdict was already set by the content-filter path — just stop iterating.
+                break
             # All retries exhausted — fall back to heuristic-only verdict instead of
             # raising and losing all the preflight/heuristics work done so far.
             cb(f"LLM call #{iteration + 1} failed after all retries — using heuristic fallback")
