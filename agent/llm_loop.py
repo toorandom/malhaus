@@ -118,6 +118,7 @@ def _content_filter_final_verdict(
     strings_llm: Dict[str, Any],
     evidence_pack: Dict[str, Any],
     tool_results: Dict[str, Any],
+    llm_calls: Optional[List[Dict[str, Any]]] = None,
     progress_cb=None,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -203,9 +204,26 @@ Return ONLY this JSON (no markdown):
         llm = get_llm(model)
         resp = llm.invoke([HumanMessage(content=prompt)])
         raw = resp.content if isinstance(resp.content, str) else json.dumps(resp.content)
-        return _parse_any_json_object(raw)
+        result = _parse_any_json_object(raw)
+        if llm_calls is not None:
+            llm_calls.append({
+                "iteration": "cf_recovery",
+                "prompt": prompt[:80000],
+                "raw_output": raw[:8000],
+                "failed": False,
+                "note": "content-filter-safe metadata-only recovery call",
+            })
+        return result
     except Exception as e:
         cb(f"Content-filter-safe verdict call also failed: {e}")
+        if llm_calls is not None:
+            llm_calls.append({
+                "iteration": "cf_recovery",
+                "prompt": prompt[:80000],
+                "raw_output": f"FAILED: {e}",
+                "failed": True,
+                "note": "content-filter-safe metadata-only recovery call",
+            })
         return None
 
 
@@ -441,7 +459,7 @@ RULES:
                     _cf_verdict = _content_filter_final_verdict(
                         model=model, kind=kind, heuristics=heuristics,
                         strings_llm=strings_llm, evidence_pack=evidence_pack,
-                        tool_results=tool_results, progress_cb=cb,
+                        tool_results=tool_results, llm_calls=llm_calls, progress_cb=cb,
                     )
                     if _cf_verdict is not None:
                         verdict = _cf_verdict
@@ -461,19 +479,19 @@ RULES:
                     last_exc = RuntimeError(f"content_filter_repeated_{_content_filter_count}x")
                     break
 
-                # Strip ALL tool-result HumanMessages from context — not just the last one.
-                # The offensive content may be in any prior tool result (e.g. script_content).
-                _filter_note = (
-                    "[SYSTEM: Tool result was BLOCKED by provider content filter — "
-                    "file contains malicious/dangerous code. "
-                    "risk_level must be at least 'suspicious' (likely 'likely_malware'). "
-                    "Produce the final verdict JSON now. No more tool calls.]"
-                )
-                for _i in range(len(messages)):
-                    if isinstance(messages[_i], HumanMessage):
-                        c = messages[_i].content if isinstance(messages[_i].content, str) else ""
-                        if c.startswith("Tool '") or c.startswith("[SYSTEM:"):
-                            messages[_i] = HumanMessage(content=_filter_note)
+                # Strip ALL tool-result HumanMessages AND intermediate AIMessages —
+                # AIMessages from earlier iterations may contain LLM analysis of malicious
+                # content which re-triggers the filter even after tool results are removed.
+                # Keep: SystemMessage (index 0), initial HumanMessage (index 1).
+                # Replace: all subsequent messages with a single compact filter note.
+                _filter_note = "[content filtered — file contains dangerous code]"
+                _new_messages = messages[:2]  # system prompt + initial context only
+                _new_messages.append(HumanMessage(
+                    content="[SYSTEM: Prior tool results were BLOCKED by provider content filter. "
+                            "Produce final verdict based on initial context above only. "
+                            "risk_level must be at least 'suspicious'. No tool calls.]"
+                ))
+                messages = _new_messages
 
                 last_exc = None
                 _force_verdict = True  # ensure next outer iteration is a final verdict call
