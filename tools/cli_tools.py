@@ -1049,7 +1049,8 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
     if password:
         cmd.append(f"-p{password}")
     cmd.append(path)
-    extract_result = run_jailed(cmd, path, timeout=120, max_bytes=200000)
+    # Use run() not run_jailed(): firejail whitelist blocks writes to extracted dir.
+    extract_result = run(cmd, timeout=120, max_bytes=200000)
 
     # Detect wrong/missing password: 7z returns rc=2 and leaves outdir empty
     extract_rc = extract_result.get("rc", 0)
@@ -1238,9 +1239,11 @@ def msi_extract(path: str) -> Dict[str, Any]:
     outdir = EXTRACT_DIR / f"msi_{p.stem}_{int(p.stat().st_mtime)}"
     _safe_mkdir(outdir)
 
-    extract_result = run_jailed(
+    # Use run() not run_jailed(): firejail whitelist blocks writes to extracted dir.
+    # 7z is an archive parser, not executing MSI content.
+    extract_result = run(
         ["7z", "x", path, f"-o{outdir}", "-y", "-bd"],
-        path, timeout=120, max_bytes=200000,
+        timeout=120, max_bytes=200000,
     )
 
     pe_files: list = []
@@ -1275,10 +1278,7 @@ def msi_extract(path: str) -> Dict[str, Any]:
     # Strings preview of largest PE for backwards compat with strings_llm
     pe_strings = ""
     if largest_pe:
-        s_res = run_jailed(
-            ["strings", "-a", "-n", "6", largest_pe],
-            largest_pe, timeout=40, max_bytes=300000,
-        )
+        s_res = run(["strings", "-a", "-n", "6", largest_pe], timeout=40, max_bytes=300000)
         pe_strings = s_res.get("stdout", "")
 
     # Build human-readable inventory for the LLM snip
