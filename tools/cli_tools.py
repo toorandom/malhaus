@@ -593,7 +593,8 @@ def rtfobj_extract(path: str) -> Dict[str, Any]:
         before = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
         # Use run() not run_jailed(): firejail whitelist blocks writes to extracted dir.
         # rtfobj is a Python analysis tool (oletools) — it parses structure, does not execute code.
-        result = run(["rtfobj", "-d", str(outdir), path], timeout=180, max_bytes=650000)
+        # -s all is REQUIRED: -d alone only sets dest dir, files are not saved without -s.
+        result = run(["rtfobj", "-d", str(outdir), "-s", "all", path], timeout=180, max_bytes=650000)
         after = {f for f in outdir.rglob("*") if f.is_file()} if outdir.exists() else set()
         new_files = sorted(after - before)
 
