@@ -32,6 +32,44 @@ def _unwrap_text(payload: Any) -> Optional[str]:
     return None
 
 
+def _extract_first_json_object(s: str) -> str:
+    """
+    Return the first top-level {...} JSON object from s using balanced-brace
+    scanning.  Correctly handles nested objects, arrays, and string literals
+    (including escaped quotes), so it stops at the real closing brace rather
+    than the last } in the whole string.
+
+    If the LLM appends commentary or a second JSON block after the verdict,
+    this extracts only the first object — avoiding the greedy-regex failure
+    mode where json.loads is given the over-extended match.
+    """
+    start = s.find("{")
+    if start == -1:
+        return ""
+    depth = 0
+    in_str = False
+    esc = False
+    for i, ch in enumerate(s[start:], start):
+        if esc:
+            esc = False
+            continue
+        if in_str:
+            if ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start : i + 1]
+    return ""
+
+
 def _parse_any_json_object(raw: str) -> Dict[str, Any]:
     raw = (raw or "").strip()
 
@@ -58,8 +96,19 @@ def _parse_any_json_object(raw: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 2) Fallback: find first {...} block in raw text
     cleaned = _clean_fences(raw)
+
+    # 2) Balanced-brace extraction — handles trailing commentary / second JSON blocks
+    candidate = _extract_first_json_object(cleaned)
+    if candidate:
+        try:
+            d = _first_dict(json.loads(candidate))
+            if d is not None:
+                return d
+        except Exception:
+            pass
+
+    # 3) Non-greedy regex (small self-contained objects)
     m = re.search(r"\{.*?\}", cleaned, flags=re.DOTALL)
     if m:
         try:
@@ -68,15 +117,8 @@ def _parse_any_json_object(raw: str) -> Dict[str, Any]:
                 return d
         except Exception:
             pass
-    # 3) Last resort: greedy match
-    m2 = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if not m2:
-        raise ValueError("no_json_object_found")
-    result = json.loads(m2.group(0))
-    d = _first_dict(result)
-    if d is not None:
-        return d
-    raise ValueError("no_json_dict_found")
+
+    raise ValueError("no_json_object_found")
 
 
 def _ui_safe_fallback(kind: str, heuristics: Dict[str, Any], raw: str, reason: str = "parse_failed") -> Dict[str, Any]:
@@ -248,6 +290,7 @@ def run_llm_tool_loop(
     _thinking_disabled = False
     _content_filter_fired = False   # tracks if any tool result was blocked by content filter
     _content_filter_count = 0       # number of times filter has fired (cap retries)
+    _parse_errors = 0               # number of JSON parse failures — allows one retry
 
     tool_catalog_block = "(no tools)"
     if tool_catalog:
@@ -574,10 +617,23 @@ RULES:
 
         try:
             parsed = _parse_any_json_object(raw)
-        except Exception:
-            if is_last:
+        except Exception as _parse_exc:
+            _parse_errors += 1
+            cb(f"LLM call #{iteration + 1} — JSON parse failed ({_parse_exc}); "
+               f"{'falling back' if is_last or _parse_errors >= 2 else 'asking LLM to retry'}")
+            llm_calls[-1]["parse_error"] = str(_parse_exc)
+            llm_calls[-1]["raw_output_full_tail"] = raw[-500:]  # last 500 chars for debugging
+            if is_last or _parse_errors >= 2:
                 verdict = _ui_safe_fallback(kind, heuristics, raw)
-            break
+                break
+            # First parse failure — send a compact correction and retry
+            messages.append(AIMessage(content=raw[:3000]))
+            messages.append(HumanMessage(
+                content="[SYSTEM: Your response could not be parsed as JSON. "
+                        "Respond with ONLY valid JSON — no markdown, no explanation, "
+                        "no text before or after the JSON object.]"
+            ))
+            continue
 
         if parsed.get("action") == "final" or is_last:
             # Programmatic guard: reject the verdict if required tools haven't been called yet.
