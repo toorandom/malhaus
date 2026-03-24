@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict
+from shutil import which
 
 from tools.cli_tools import ALL_TOOLS, byte_heatmap
 from agent.custom_loader import load_custom_tools, tool_catalog
