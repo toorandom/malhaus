@@ -167,12 +167,23 @@ rebuilds and updates:
 ## Updating to a new version
 
 ```bash
-# pull latest code
-git pull   # or scp the new files
+# pull latest code — preserve your local nginx/nginx.conf (has your real domain + cert paths)
+git stash -- nginx/nginx.conf docker-compose.yml
+git pull
+git stash pop
 
 # rebuild the image and restart (zero-downtime swap takes ~5 seconds)
 docker compose up -d --build
 ```
+
+> **Important:** `nginx/nginx.conf` and `docker-compose.yml` in the repo contain placeholder values (`your-domain.com`, `/etc/letsencrypt`). Your server has these files edited with your real domain and cert paths. Always stash them before pulling, or use `git pull` and resolve conflicts — **never** run `git checkout nginx/nginx.conf` as it will wipe your working config and bring nginx down.
+>
+> After a pull, if nginx.conf changed upstream you may need to re-apply your domain:
+> ```bash
+> sed -i 's/your-domain.com/YOUR_ACTUAL_DOMAIN/g' nginx/nginx.conf
+> # if using self-signed certs, also fix cert paths (see Quick start step 5b in README)
+> docker compose restart nginx
+> ```
 
 ---
 
