@@ -291,6 +291,8 @@ def run_llm_tool_loop(
     _content_filter_fired = False   # tracks if any tool result was blocked by content filter
     _content_filter_count = 0       # number of times filter has fired (cap retries)
     _parse_errors = 0               # number of JSON parse failures — allows one retry
+    _error_recovery_done = False    # True after one mid-loop failure recovery attempt
+    _recovery_model = model         # may be switched to fallback_model during error recovery
 
     tool_catalog_block = "(no tools)"
     if tool_catalog:
@@ -422,7 +424,7 @@ RULES:
         _t0 = _time.time()
         last_exc = None
         resp = None
-        _current_model = model
+        _current_model = _recovery_model
         for _attempt in range(3):
             # On a timeout retry: switch to fallback model (no mandatory thinking)
             # so the user isn't blocked indefinitely by the thinking model.
@@ -563,8 +565,26 @@ RULES:
             if verdict is not None:
                 # Verdict was already set by the content-filter path — just stop iterating.
                 break
-            # All retries exhausted — fall back to heuristic-only verdict instead of
-            # raising and losing all the preflight/heuristics work done so far.
+            # All retries exhausted. If we haven't tried error recovery yet and we have
+            # accumulated tool results worth saving, attempt one final forced-verdict LLM
+            # call rather than immediately discarding all the work done so far.
+            if not is_last and not _error_recovery_done:
+                _error_recovery_done = True
+                _reason_str = "timed out" if isinstance(last_exc, TimeoutError) else f"failed ({type(last_exc).__name__})"
+                cb(f"LLM call #{iteration + 1} {_reason_str} — attempting recovery: forced final verdict from accumulated context")
+                # Switch to fallback model if available (faster, less likely to time out)
+                if fallback_model and _recovery_model != fallback_model:
+                    _recovery_model = fallback_model
+                    _thinking_disabled = True
+                    cb(f"Recovery: switching to fallback model")
+                messages.append(HumanMessage(
+                    content="[SYSTEM: Previous LLM call failed. You MUST produce your final verdict NOW "
+                            "based on all evidence gathered so far. "
+                            "Respond with STRICT JSON only, action='final'. No tool calls.]"
+                ))
+                _force_verdict = True
+                continue  # next outer iteration will be a forced final verdict call
+            # Recovery also failed (or is_last) — fall back to heuristic-only verdict.
             cb(f"LLM call #{iteration + 1} failed after all retries — using heuristic fallback")
             _reason = "timeout" if isinstance(last_exc, TimeoutError) else "parse_failed"
             verdict = _ui_safe_fallback(kind, heuristics, f"all_retries_failed: {last_exc}", reason=_reason)
