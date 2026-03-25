@@ -1,7 +1,7 @@
 import os
 
 # a) max size of input (MB)
-MAX_UPLOAD_MB = int(os.environ.get("MALHAUS_MAX_UPLOAD_MB", "10"))
+MAX_UPLOAD_MB = int(os.environ.get("MALHAUS_MAX_UPLOAD_MB", "50"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 # c) max requests per IP per hour

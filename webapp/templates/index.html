@@ -215,7 +215,14 @@
 
     try {
       const resp = await fetch(form.action, {method: "POST", body: new FormData(form)});
-      if (!resp.ok) throw new Error("Server error " + resp.status);
+      if (!resp.ok) {
+        if (resp.status === 413) {
+          throw new Error("File too large — max {{ max_mb }} MB. Please upload a smaller file.");
+        }
+        let _errMsg = "Server error " + resp.status;
+        try { const _j = await resp.json(); if (_j.error) _errMsg = _j.error; } catch {}
+        throw new Error(_errMsg);
+      }
 
       const reader = resp.body.getReader();
       const dec = new TextDecoder();

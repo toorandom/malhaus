@@ -998,9 +998,14 @@ def _check_archive_uncompressed_size(path: str, max_bytes: int, password: str = 
     except Exception:
         pass  # not a ZIP or unreadable — fall through to 7z listing
 
-    # For RAR, 7z, and other formats: use `7z l -slt` to read metadata only
+    # For RAR, 7z, and other formats: use `7z l -slt` to read metadata only.
+    # Pass password so encrypted archives report real uncompressed sizes.
     try:
-        list_result = run(["7z", "l", "-slt", path], timeout=15, max_bytes=500000)
+        _list_cmd = ["7z", "l", "-slt"]
+        if password:
+            _list_cmd.append(f"-p{password}")
+        _list_cmd.append(path)
+        list_result = run(_list_cmd, timeout=15, max_bytes=500000)
         stdout = list_result.get("stdout") or ""
         total = 0
         for line in stdout.splitlines():
