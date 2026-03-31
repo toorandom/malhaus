@@ -93,8 +93,8 @@
     <!-- Authentication -->
     <section class="card">
       <h2 class="section-title">Authentication</h2>
-      <p class="note">Pass your API key as a bearer token in the <span class="mono" style="font-size:12px;">X-Api-Key</span> header on every request:</p>
-      <div class="auth-box">X-Api-Key: mh_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</div>
+      <p class="note">Pass your API key as a bearer token in the <span class="mono" style="font-size:12px;">Authorization</span> header on every request:</p>
+      <div class="auth-box">Authorization: Bearer mh_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</div>
       <p class="note" style="margin-top:12px; margin-bottom:0;">Keys are issued by the admin and may carry a per-hour rate limit and an optional expiry date. Revoked or expired keys receive a <span class="mono" style="font-size:12px;">401 Unauthorized</span> response.</p>
     </section>
 
@@ -143,7 +143,7 @@ POLL_INTERVAL  = 5   # seconds between status checks
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def submit(server: str, key: str, args: argparse.Namespace) -> str:
     """Submit a file or URL and return the job_id."""
-    headers = {"X-Api-Key": key}
+    headers = {"Authorization": f"Bearer {key}"}
     endpoint = f"{server}/api/v1/analyze"
 
     if args.file:
@@ -188,7 +188,7 @@ def submit(server: str, key: str, args: argparse.Namespace) -> str:
 
 def poll(server: str, key: str, job_id: str) -> dict:
     """Poll until the job is done or failed. Returns the result dict."""
-    headers = {"X-Api-Key": key}
+    headers = {"Authorization": f"Bearer {key}"}
     url = f"{server}/api/v1/jobs/{job_id}"
     while True:
         resp = requests.get(url, headers=headers, timeout=30)
@@ -196,45 +196,43 @@ def poll(server: str, key: str, job_id: str) -> dict:
         data = resp.json()
         status = data.get("status", "unknown")
         print(f"  [{status}]", flush=True)
-        if status in ("done", "error"):
+        if status in ("done", "failed"):
             return data
         time.sleep(POLL_INTERVAL)
 
 
 def print_result(data: dict) -> None:
     """Print a human-readable summary of a completed job."""
-    if data.get("status") == "error":
+    if data.get("status") == "failed":
         print("Analysis failed:", data.get("error"))
         return
 
-    r = data.get("result", {})
-    risk       = r.get("risk_level", "unknown")
-    confidence = r.get("confidence", "?")
-    reasons    = r.get("top_reasons", [])
-    tools      = r.get("tools_used", [])
-    sha256     = data.get("sha256", r.get("sha256", ""))
+    verdict    = data.get("verdict", {})
+    risk       = verdict.get("risk_level", "unknown")
+    confidence = verdict.get("confidence", "?")
+    file_type  = verdict.get("file_type", "")
+    reasons    = data.get("top_reasons", [])
+    tools      = data.get("tools_used", [])
+    sha256     = data.get("sha256", "")
+    h_score    = data.get("heuristic_score", "?")
+    s_score    = data.get("strings_score", "?")
+    report_url = data.get("report_url", "")
 
     print(f"\n{'─'*60}")
-    print(f"  risk       : {risk.upper()}")
-    print(f"  confidence : {confidence}")
+    print(f"  risk           : {risk.upper()}")
+    print(f"  confidence     : {confidence}%")
+    print(f"  file type      : {file_type}")
+    print(f"  heuristic score: {h_score}/100")
+    print(f"  strings score  : {s_score}/100")
     if sha256:
-        print(f"  sha256     : {sha256}")
+        print(f"  sha256         : {sha256}")
+    if report_url:
+        print(f"  report         : {report_url}")
     print(f"\n  Top reasons:")
     for reason in reasons[:5]:
         print(f"    • {reason}")
     if tools:
         print(f"\n  Tools used : {', '.join(tools)}")
-
-    # IOCs — only print non-empty categories
-    iocs = r.get("iocs", {})
-    ioc_lines = [
-        f"    {k}: {', '.join(v)}"
-        for k, v in iocs.items() if v
-    ]
-    if ioc_lines:
-        print(f"\n  IOCs extracted:")
-        for line in ioc_lines:
-            print(line)
     print(f"{'─'*60}\n")
 
 
@@ -299,35 +297,59 @@ if __name__ == "__main__":
 
     <!-- Response fields -->
     <section class="card">
-      <h2 class="section-title">Response fields</h2>
+      <h2 class="section-title">Response fields (status: done)</h2>
       <ul class="field-list">
         <li>
-          <span class="field-name">risk_level</span>
-          <span class="field-desc"><span class="mono" style="font-size:11px;">benign</span> · <span class="mono" style="font-size:11px;">suspicious</span> · <span class="mono" style="font-size:11px;">likely_malware</span> — overall verdict from the LLM verdict loop.</span>
+          <span class="field-name">verdict.risk_level</span>
+          <span class="field-desc"><span class="mono" style="font-size:11px;">benign</span> · <span class="mono" style="font-size:11px;">suspicious</span> · <span class="mono" style="font-size:11px;">likely_malware</span> — overall verdict from the LLM loop.</span>
         </li>
         <li>
-          <span class="field-name">confidence</span>
-          <span class="field-desc"><span class="mono" style="font-size:11px;">high</span> · <span class="mono" style="font-size:11px;">medium</span> · <span class="mono" style="font-size:11px;">low</span> — how confident the model is in the verdict.</span>
+          <span class="field-name">verdict.confidence</span>
+          <span class="field-desc">Integer 0–100 — how confident the model is in the verdict.</span>
+        </li>
+        <li>
+          <span class="field-name">verdict.file_type</span>
+          <span class="field-desc">Detected file type string (e.g. <span class="mono" style="font-size:11px;">pe</span>, <span class="mono" style="font-size:11px;">elf</span>, <span class="mono" style="font-size:11px;">pdf</span>).</span>
         </li>
         <li>
           <span class="field-name">top_reasons</span>
-          <span class="field-desc">List of strings explaining the verdict — the most significant evidence items.</span>
+          <span class="field-desc">List of strings — the most significant evidence items from the analysis.</span>
         </li>
         <li>
-          <span class="field-name">iocs</span>
-          <span class="field-desc">Dict of extracted indicators: IPs, domains, URLs, registry keys, file paths, mutexes, etc.</span>
+          <span class="field-name">heuristic_score</span>
+          <span class="field-desc">Deterministic score 0–100 computed before the LLM pass (entropy, imports, IOC hits, etc.).</span>
+        </li>
+        <li>
+          <span class="field-name">strings_score</span>
+          <span class="field-desc">Score 0–100 based on string analysis (suspicious patterns, URLs, registry keys, etc.).</span>
+        </li>
+        <li>
+          <span class="field-name">strings_summary</span>
+          <span class="field-desc">Short LLM-generated summary of notable strings found in the file.</span>
         </li>
         <li>
           <span class="field-name">tools_used</span>
           <span class="field-desc">List of static analysis tools that ran (e.g. <span class="mono" style="font-size:11px;">objdump</span>, <span class="mono" style="font-size:11px;">olevba</span>, <span class="mono" style="font-size:11px;">ghidra</span>).</span>
         </li>
         <li>
-          <span class="field-name">sha256</span>
-          <span class="field-desc">SHA-256 hash of the submitted file. Results are cached by hash — resubmitting an identical file returns instantly.</span>
+          <span class="field-name">tool_outputs</span>
+          <span class="field-desc">Dict mapping tool name → <span class="mono" style="font-size:11px;">{stdout, stderr, error}</span> — raw output from each tool.</span>
         </li>
         <li>
-          <span class="field-name">score</span>
-          <span class="field-desc">Deterministic heuristic score 0–100 computed before the LLM pass (entropy, IOC hits, import names, etc.).</span>
+          <span class="field-name">sha256</span>
+          <span class="field-desc">SHA-256 of the submitted file. Results are cached by hash — resubmitting an identical file returns instantly.</span>
+        </li>
+        <li>
+          <span class="field-name">report_url</span>
+          <span class="field-desc">Relative URL to the HTML report page for this analysis.</span>
+        </li>
+        <li>
+          <span class="field-name">report_json_url</span>
+          <span class="field-desc">Relative URL to the full raw JSON report.</span>
+        </li>
+        <li>
+          <span class="field-name">html_summary</span>
+          <span class="field-desc">Pre-rendered HTML snippet with a human-readable summary — useful for embedding in ticketing systems or chat bots.</span>
         </li>
       </ul>
     </section>
