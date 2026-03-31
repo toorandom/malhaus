@@ -320,15 +320,14 @@ h2{margin:0; font-size:18px}
   color: #fff;
 }
 
-.hashlink,
-.hashlink:visited,
-.hashlink:hover,
-.hashlink:active{
+.hashlink{
   color: rgba(255,255,255,.92);
-  text-decoration:underline;
+  text-decoration:underline !important;
   word-break:break-all;
 }
-.hashlink:hover{opacity:.75;}
+.hashlink:visited{ color: rgba(255,255,255,.92); }
+.hashlink:hover  { color: rgba(255,255,255,.92); opacity:.75; }
+.hashlink:active { color: rgba(255,255,255,.92); }
 
 .footer{
   display:flex;
