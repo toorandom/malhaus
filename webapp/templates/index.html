@@ -14,7 +14,7 @@
       <div class="brand-block">
         <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
         <div class="byline">
-          <span class="tagline">AI Malware Analysis v0.3</span>
+          <span class="tagline">AI Malware Analysis v0.4</span>
           <span class="sep">·</span>
           by Eduardo Ruiz Duarte · <span class="mono">toorandom@gmail.com</span>
         </div>
@@ -25,6 +25,8 @@
           IP <span class="mono">{{ ip }}</span> · left <span class="mono">{{ remaining }}</span>/<span class="mono">{{ max_per_hour }}</span>
         </div>
         <div class="header-actions">
+          <a class="btn ghost" href="/api-docs">API</a>
+          <a class="btn ghost" href="/admin/keys">API Keys</a>
           <a class="btn ghost" href="{{ url_for('bp.about') }}">About</a>
         </div>
       </div>

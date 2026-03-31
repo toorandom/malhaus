@@ -11,6 +11,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
+from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DB_PATH  = BASE_DIR / "maltriage.db"
@@ -64,10 +65,18 @@ def ensure_api_tables() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_api_staged_key ON api_staged_files(key_id);
         """)
+        # Admin users table
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS admin_users (
+            username      TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL
+        );
+        """)
         # Migrations — safe to run on existing DBs
         for _tbl, _col_def in [
             ("api_staged_files", "archive_password TEXT NOT NULL DEFAULT ''"),
             ("api_staged_files", "sha256 TEXT NOT NULL DEFAULT ''"),
+            ("api_keys", "expires_at INTEGER"),
         ]:
             try:
                 con.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col_def}")
@@ -80,6 +89,64 @@ def ensure_api_tables() -> None:
 
 def _hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Admin user management
+# ---------------------------------------------------------------------------
+
+def admin_exists() -> bool:
+    ensure_api_tables()
+    con = _db()
+    try:
+        row = con.execute("SELECT 1 FROM admin_users LIMIT 1").fetchone()
+        return row is not None
+    finally:
+        con.close()
+
+
+def create_admin(username: str, password: str) -> None:
+    ensure_api_tables()
+    con = _db()
+    try:
+        pw_hash = generate_password_hash(password)
+        con.execute(
+            "INSERT INTO admin_users(username, password_hash) VALUES(?, ?)",
+            (username, pw_hash),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def verify_admin(username: str, password: str) -> bool:
+    ensure_api_tables()
+    con = _db()
+    try:
+        row = con.execute(
+            "SELECT password_hash FROM admin_users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if not row:
+            return False
+        return check_password_hash(row["password_hash"], password)
+    finally:
+        con.close()
+
+
+def change_admin_password(username: str, new_password: str) -> bool:
+    ensure_api_tables()
+    con = _db()
+    try:
+        pw_hash = generate_password_hash(new_password)
+        cur = con.execute(
+            "UPDATE admin_users SET password_hash = ? WHERE username = ?",
+            (pw_hash, username),
+        )
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -105,11 +172,13 @@ def verify_bearer(auth_header: str | None) -> dict | None:
     con = _db()
     try:
         row = con.execute(
-            "SELECT key_id, label, revoked, rate_limit_per_hour "
+            "SELECT key_id, label, revoked, rate_limit_per_hour, expires_at "
             "FROM api_keys WHERE key_hash = ?",
             (h,),
         ).fetchone()
         if not row or row["revoked"]:
+            return None
+        if row["expires_at"] is not None and row["expires_at"] < int(time.time()):
             return None
         con.execute(
             "UPDATE api_keys SET last_used_at = ? WHERE key_id = ?",
@@ -163,7 +232,7 @@ def api_rate_check(key_id: str, limit_per_hour: int) -> bool:
 # Key CRUD (used by manage_keys.py)
 # ---------------------------------------------------------------------------
 
-def create_key(label: str, rate_limit_per_hour: int = 60) -> tuple[str, str]:
+def create_key(label: str, rate_limit_per_hour: int = 60, expires_at: int | None = None) -> tuple[str, str]:
     """
     Create a new API key.
     Returns (full_token, key_id).  full_token is shown once and never stored.
@@ -176,9 +245,9 @@ def create_key(label: str, rate_limit_per_hour: int = 60) -> tuple[str, str]:
     con = _db()
     try:
         con.execute(
-            "INSERT INTO api_keys(key_id, key_hash, label, created_at, revoked, rate_limit_per_hour) "
-            "VALUES(?, ?, ?, ?, 0, ?)",
-            (key_id, key_hash, label, int(time.time()), rate_limit_per_hour),
+            "INSERT INTO api_keys(key_id, key_hash, label, created_at, revoked, rate_limit_per_hour, expires_at) "
+            "VALUES(?, ?, ?, ?, 0, ?, ?)",
+            (key_id, key_hash, label, int(time.time()), rate_limit_per_hour, expires_at),
         )
         con.commit()
     finally:
@@ -205,7 +274,7 @@ def list_keys() -> list[dict]:
     con = _db()
     try:
         rows = con.execute(
-            "SELECT key_id, label, created_at, last_used_at, revoked, rate_limit_per_hour "
+            "SELECT key_id, label, created_at, last_used_at, revoked, rate_limit_per_hour, expires_at "
             "FROM api_keys ORDER BY created_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]

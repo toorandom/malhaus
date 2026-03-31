@@ -89,8 +89,8 @@ def create_app():
         resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         resp.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
             "img-src 'self' data:"
         )
         return resp
@@ -157,7 +157,8 @@ def create_app():
         # Allow static files, captcha route, and API endpoints
         if (request.path.startswith("/static")
                 or request.path.startswith("/captcha")
-                or request.path.startswith("/api/")):
+                or request.path.startswith("/api/")
+                or request.path.startswith("/admin")):
             return None
         if not session.get("captcha_solved"):
             return redirect(url_for("captcha"))
@@ -176,6 +177,12 @@ def create_app():
     from webapp.api_routes import api_bp
     csrf.exempt(api_bp)
     app.register_blueprint(api_bp)
+
+    from webapp.admin_routes import admin_bp
+    app.register_blueprint(admin_bp)
+
+    from webapp.routes_api_docs import api_docs_bp
+    app.register_blueprint(api_docs_bp)
 
     return app
 

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if setup %}Admin Setup{% else %}Admin Login{% endif %} · malhaus</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 18px;
+      padding: 36px 32px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    }
+    .login-card h1 {
+      margin: 0 0 6px 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .login-card .sub {
+      margin: 0 0 28px 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 600;
+      letter-spacing: .3px;
+      text-transform: uppercase;
+    }
+    .field input {
+      width: 100%;
+      background: var(--panel2);
+      border: 1px solid rgba(255,255,255,.15);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .field input:focus {
+      border-color: rgba(255,255,255,.35);
+    }
+    .submit-btn {
+      width: 100%;
+      margin-top: 8px;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .submit-btn:hover { background: rgba(255,255,255,.12); }
+    .alerts { margin-bottom: 20px; }
+    .alert {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.12);
+      margin-bottom: 8px;
+      font-size: 13px;
+      background: rgba(255,255,255,.03);
+    }
+    .alert.error   { border-color: rgba(255,77,77,.4);    background: rgba(255,77,77,.09); }
+    .alert.success { border-color: rgba(42,214,124,.35);  background: rgba(42,214,124,.08); }
+    .brand-link {
+      display: block;
+      text-align: center;
+      margin-bottom: 24px;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body class="bg">
+  <div class="login-wrap">
+    <div class="login-card">
+      <a class="brand-link" href="/">malhaus</a>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="alerts">
+            {% for category, message in messages %}
+              <div class="alert {{ category }}">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% if setup %}
+        <h1>First-time setup</h1>
+        <div class="sub">Create the administrator account.</div>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="field">
+            <label for="username">Username</label>
+            <input id="username" type="text" name="username" required autocomplete="username">
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" type="password" name="password" required autocomplete="new-password">
+          </div>
+          <div class="field">
+            <label for="confirm_password">Confirm password</label>
+            <input id="confirm_password" type="password" name="confirm_password" required autocomplete="new-password">
+          </div>
+          <button class="submit-btn" type="submit">Create account</button>
+        </form>
+      {% else %}
+        <h1>Admin login</h1>
+        <div class="sub">API key management dashboard.</div>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="field">
+            <label for="username">Username</label>
+            <input id="username" type="text" name="username" required autocomplete="username">
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" type="password" name="password" required autocomplete="current-password">
+          </div>
+          <button class="submit-btn" type="submit">Log in</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

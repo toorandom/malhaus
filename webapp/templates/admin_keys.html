@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API Key Management · malhaus</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>
+    .admin-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 4px;
+    }
+    .admin-header h1 { margin: 0; font-size: 20px; }
+    .admin-meta { display:flex; align-items:center; gap:12px; font-size:13px; color:var(--muted); }
+    .admin-meta a { color:var(--muted); text-decoration:none; border-bottom:1px solid rgba(255,255,255,.2); }
+    .admin-meta a:hover { color:var(--text); }
+
+    /* Flash alerts */
+    .alerts { margin: 14px 0 0 0; }
+    .alert { padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.12); margin-bottom:10px; font-size:13px; background:rgba(255,255,255,.03); }
+    .alert.error   { border-color:rgba(255,77,77,.4);   background:rgba(255,77,77,.09); }
+    .alert.success { border-color:rgba(42,214,124,.35); background:rgba(42,214,124,.08); color:var(--green); }
+    .alert.key {
+      border-color: rgba(240,198,74,.5);
+      background: rgba(240,198,74,.1);
+      padding: 14px 16px;
+    }
+    .alert.key .key-label { font-size:12px; color:var(--yellow); font-weight:700; margin-bottom:6px; text-transform:uppercase; letter-spacing:.4px; }
+    .alert.key .key-token { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace; font-size:13px; color:var(--text); word-break:break-all; background:rgba(0,0,0,.35); border-radius:6px; padding:8px 10px; margin-top:6px; border:1px solid rgba(240,198,74,.25); }
+    .alert.key .key-warn { font-size:12px; color:var(--yellow); margin-top:8px; font-weight:600; }
+
+    /* Create form */
+    .create-form { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+    .form-field { display:flex; flex-direction:column; gap:5px; }
+    .form-field label { font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.3px; }
+    .form-field input { background:var(--panel2); border:1px solid rgba(255,255,255,.15); color:var(--text); border-radius:6px; padding:8px 12px; font-size:13px; outline:none; width:100%; }
+    .form-field input:focus { border-color:rgba(255,255,255,.35); }
+    .form-field input[type=number] { width:100px; }
+    .form-field .label-input { width:200px; }
+
+    /* Keys table */
+    .keys-table { width:100%; border-collapse:collapse; margin-top:10px; font-size:12px; }
+    .keys-table th { text-align:left; color:var(--muted); font-size:11px; font-weight:600; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.10); }
+    .keys-table td { padding:10px 10px; border-bottom:1px solid rgba(255,255,255,.06); vertical-align:middle; }
+    .keys-table tr:last-child td { border-bottom:none; }
+    .keys-table tr:hover td { background:rgba(255,255,255,.02); }
+
+    .key-id-cell { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace; font-size:11px; color:var(--muted); word-break:break-all; }
+
+    /* Status badges */
+    .status-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; border:1px solid rgba(255,255,255,.12); }
+    .status-badge.active  { border-color:rgba(42,214,124,.4);  color:var(--green); background:rgba(42,214,124,.1); }
+    .status-badge.expired { border-color:rgba(240,198,74,.4);  color:var(--yellow); background:rgba(240,198,74,.1); }
+    .status-badge.revoked { border-color:rgba(255,77,77,.35);  color:var(--red);    background:rgba(255,77,77,.08); }
+
+    /* Revoke button */
+    .revoke-btn { font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid rgba(255,77,77,.35); background:rgba(255,77,77,.08); color:var(--red); cursor:pointer; font-weight:600; }
+    .revoke-btn:hover { background:rgba(255,77,77,.18); }
+
+    .empty-msg { color:var(--muted); font-size:13px; padding:16px 0; }
+  </style>
+</head>
+<body class="bg">
+  <div class="wrap">
+
+    <header class="header header-black">
+      <div class="brand-block">
+        <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
+        <div class="sub muted">Admin</div>
+      </div>
+      <div class="admin-meta">
+        <span class="mono">{{ username }}</span>
+        <a href="{{ url_for('admin_bp.password') }}">Change password</a>
+        <a href="{{ url_for('admin_bp.logout') }}" class="btn ghost">Log out</a>
+      </div>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="alerts">
+          {% for category, message in messages %}
+            {% if category == 'key' %}
+              <div class="alert key">
+                <div class="key-label">New API key created</div>
+                <div class="key-token">{{ message }}</div>
+                <div class="key-warn">Copy now — this token will not be shown again.</div>
+              </div>
+            {% else %}
+              <div class="alert {{ category }}">{{ message }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <section class="card">
+      <div class="row" style="margin-bottom:18px;">
+        <h2>API Key Management</h2>
+        <a class="btn ghost" href="{{ url_for('bp.index') }}">← Home</a>
+      </div>
+
+      <h2 style="font-size:15px; margin-bottom:14px;">Create new key</h2>
+      <form method="post" action="{{ url_for('admin_bp.keys_create') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="create-form">
+          <div class="form-field">
+            <label for="label">Label</label>
+            <input class="label-input" id="label" type="text" name="label" placeholder="e.g. ci-pipeline" required>
+          </div>
+          <div class="form-field">
+            <label for="rate_limit">Rate limit / hour</label>
+            <input type="number" id="rate_limit" name="rate_limit" value="60" min="1" max="10000">
+          </div>
+          <div class="form-field">
+            <label for="expires_days">Expires in days</label>
+            <input type="number" id="expires_days" name="expires_days" min="1" placeholder="never">
+          </div>
+          <button class="btn" type="submit" style="align-self:flex-end; font-size:13px; padding:9px 16px;">Create key</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2 style="margin-bottom:14px;">All keys</h2>
+      {% if keys %}
+        <div style="overflow-x:auto;">
+          <table class="keys-table">
+            <thead>
+              <tr>
+                <th>Key ID</th>
+                <th>Label</th>
+                <th>Created</th>
+                <th>Last used</th>
+                <th>Expires</th>
+                <th>Rate limit</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for k in keys %}
+              <tr>
+                <td class="key-id-cell">{{ k.key_id }}</td>
+                <td>{{ k.label }}</td>
+                <td class="mono muted">{{ k.created_fmt }}</td>
+                <td class="mono muted">{{ k.last_used_fmt }}</td>
+                <td class="mono muted">{{ k.expires_fmt }}</td>
+                <td class="mono">{{ k.rate_limit_per_hour }}/hr</td>
+                <td><span class="status-badge {{ k.status }}">{{ k.status }}</span></td>
+                <td>
+                  {% if k.status != 'revoked' %}
+                  <form method="post" action="{{ url_for('admin_bp.keys_revoke', key_id=k.key_id) }}" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="revoke-btn" type="submit"
+                      onclick="return confirm('Revoke key {{ k.label }}? This cannot be undone.')">Revoke</button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-msg">No API keys yet. Create one above.</div>
+      {% endif %}
+    </section>
+
+    <footer class="footer">
+      <span class="mono muted">malhaus admin 2026</span>
+      <a href="{{ url_for('admin_bp.password') }}" style="font-size:12px; color:var(--muted);">Change password</a>
+    </footer>
+
+  </div>
+</body>
+</html>
