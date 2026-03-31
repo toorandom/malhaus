@@ -110,17 +110,17 @@ a:visited{color:rgba(255,255,255,.90)}
 
 .header-right-col{
   display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:8px;
-  min-width:260px;
+  flex-direction:row;
+  align-items:center;
+  gap:14px;
+  flex-shrink:0;
 }
 
 .header-actions{
   display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:8px;
+  flex-direction:row;
+  align-items:center;
+  gap:6px;
 }
 
 .btn{
