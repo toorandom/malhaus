@@ -9,7 +9,6 @@ Security notes:
 - Session inactivity timeout: 5 minutes (checked on every protected route)
 - Session regenerated (cleared + reissued) on successful login
 """
-import base64
 import io
 import secrets
 import sqlite3
@@ -18,6 +17,7 @@ from datetime import datetime
 from functools import wraps
 
 from captcha.image import ImageCaptcha
+from PIL import Image, ImageOps
 from flask import (
     Blueprint,
     flash,
@@ -124,13 +124,9 @@ def _clear_failed_attempts(ip: str):
         con.close()
 
 
-def _generate_captcha() -> tuple[str, str]:
-    """Return (text, base64_png) for a fresh captcha challenge."""
-    text = "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(_CAPTCHA_LEN))
-    buf = io.BytesIO()
-    _image_gen.write(text, buf)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    return text, b64
+def _generate_captcha_text() -> str:
+    """Return a fresh captcha text (image served via dedicated route, not stored in cookie)."""
+    return "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(_CAPTCHA_LEN))
 
 
 def _session_captcha_fresh() -> bool:
@@ -139,16 +135,13 @@ def _session_captcha_fresh() -> bool:
 
 
 def _reset_captcha():
-    """Generate a new captcha and store it in the session."""
-    text, b64 = _generate_captcha()
-    session["admin_captcha_text"] = text
-    session["admin_captcha_img"]  = b64
+    """Generate a new captcha text and store it in the session."""
+    session["admin_captcha_text"] = _generate_captcha_text()
 
 
 def _verify_captcha(answer: str) -> bool:
     """Verify answer against session captcha, then always clear it (single-use)."""
     expected = session.pop("admin_captcha_text", None)
-    session.pop("admin_captcha_img", None)
     if not expected or not answer:
         return False
     return answer.strip().upper() == expected.upper()
@@ -193,7 +186,7 @@ def login():
             flash(f"Too many failed attempts. Try again in {_BLOCK_WINDOW // 60} minutes.", "error")
             _reset_captcha()
             return render_template("admin_login.html", setup=setup,
-                                   captcha_img=session.get("admin_captcha_img"))
+                                   captcha_img=True)
 
         # Captcha check (always required, even for setup)
         captcha_answer = request.form.get("captcha", "").strip()
@@ -202,7 +195,7 @@ def login():
             flash("Incorrect CAPTCHA. Try again.", "error")
             _reset_captcha()
             return render_template("admin_login.html", setup=setup,
-                                   captcha_img=session.get("admin_captcha_img"))
+                                   captcha_img=True)
 
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
@@ -213,17 +206,17 @@ def login():
                 flash("Username and password are required.", "error")
                 _reset_captcha()
                 return render_template("admin_login.html", setup=True,
-                                       captcha_img=session.get("admin_captcha_img"))
+                                       captcha_img=True)
             if len(password) < 10:
                 flash("Password must be at least 10 characters.", "error")
                 _reset_captcha()
                 return render_template("admin_login.html", setup=True,
-                                       captcha_img=session.get("admin_captcha_img"))
+                                       captcha_img=True)
             if password != confirm:
                 flash("Passwords do not match.", "error")
                 _reset_captcha()
                 return render_template("admin_login.html", setup=True,
-                                       captcha_img=session.get("admin_captcha_img"))
+                                       captcha_img=True)
             create_admin(username, password)
             flash("Admin account created. Please log in.", "success")
             _reset_captcha()
@@ -251,16 +244,32 @@ def login():
         flash(f"Invalid username or password. {max(0, remaining)} attempt(s) remaining.", "error")
         _reset_captcha()
         return render_template("admin_login.html", setup=False,
-                               captcha_img=session.get("admin_captcha_img"))
+                               captcha_img=True)
 
     return render_template("admin_login.html", setup=setup,
-                           captcha_img=session.get("admin_captcha_img"))
+                           captcha_img=True)
 
 
 @admin_bp.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("admin_bp.login"))
+
+
+@admin_bp.route("/captcha.png")
+def captcha_image():
+    """Serve the current session captcha as a PNG (avoids storing image in cookie)."""
+    text = session.get("admin_captcha_text")
+    if not text:
+        return redirect(url_for("admin_bp.login"))
+    raw = io.BytesIO()
+    _image_gen.write(text, raw)
+    raw.seek(0)
+    img = ImageOps.invert(Image.open(raw).convert("RGB"))
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return Response(out.getvalue(), mimetype="image/png",
+                    headers={"Cache-Control": "no-store, no-cache"})
 
 
 @admin_bp.route("/keys")

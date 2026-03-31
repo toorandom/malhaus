@@ -139,7 +139,7 @@
           </div>
           {% if captcha_img %}
           <div class="captcha-block">
-            <img src="data:image/png;base64,{{ captcha_img }}" alt="CAPTCHA" width="220" height="70">
+            <img src="{{ url_for('admin_bp.captcha_image') }}" alt="CAPTCHA" width="220" height="70">
             <div class="field" style="margin-bottom:0;">
               <label for="captcha">Enter the code above</label>
               <input id="captcha" type="text" name="captcha" required autocomplete="off"
@@ -164,7 +164,7 @@
           </div>
           {% if captcha_img %}
           <div class="captcha-block">
-            <img src="data:image/png;base64,{{ captcha_img }}" alt="CAPTCHA" width="220" height="70">
+            <img src="{{ url_for('admin_bp.captcha_image') }}" alt="CAPTCHA" width="220" height="70">
             <div class="field" style="margin-bottom:0;">
               <label for="captcha">Enter the code above</label>
               <input id="captcha" type="text" name="captcha" required autocomplete="off"
