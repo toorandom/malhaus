@@ -260,7 +260,7 @@ h2{margin:0; font-size:18px}
 .table{margin-top: 10px; overflow-x:auto}
 .tr{
   display:grid;
-  grid-template-columns: 160px 140px 1fr minmax(120px,180px) 190px 170px 110px 80px;
+  grid-template-columns: minmax(100px,auto) minmax(80px,1fr) minmax(120px,2fr) minmax(60px,auto) minmax(80px,auto) minmax(80px,auto) minmax(80px,auto) minmax(50px,auto);
   column-gap: 12px;
   align-items:center;
   font-size: 12px;
@@ -274,6 +274,12 @@ h2{margin:0; font-size:18px}
   color: var(--muted);
 }
 .break{word-break:break-word}
+/* center: Time(1), SHA-256(3), Risk(6), Confidence(7), Score(8) */
+.tr > div:nth-child(1),
+.tr > div:nth-child(3),
+.tr > div:nth-child(6),
+.tr > div:nth-child(7),
+.tr > div:nth-child(8){ text-align:center; }
 
 .badge{
   display:inline-flex;
