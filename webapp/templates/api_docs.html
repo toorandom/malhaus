@@ -300,6 +300,14 @@ if __name__ == "__main__":
       <h2 class="section-title">Response fields (status: done)</h2>
       <ul class="field-list">
         <li>
+          <span class="field-name">status</span>
+          <span class="field-desc"><span class="mono" style="font-size:11px;">pending</span> · <span class="mono" style="font-size:11px;">running</span> · <span class="mono" style="font-size:11px;">done</span> · <span class="mono" style="font-size:11px;">failed</span> — current job state. Poll until <span class="mono" style="font-size:11px;">done</span> or <span class="mono" style="font-size:11px;">failed</span>.</span>
+        </li>
+        <li>
+          <span class="field-name">job_id</span>
+          <span class="field-desc">UUID of the analysis job, as returned by <span class="mono" style="font-size:11px;">POST /api/v1/analyze</span>.</span>
+        </li>
+        <li>
           <span class="field-name">verdict.risk_level</span>
           <span class="field-desc"><span class="mono" style="font-size:11px;">benign</span> · <span class="mono" style="font-size:11px;">suspicious</span> · <span class="mono" style="font-size:11px;">likely_malware</span> — overall verdict from the LLM loop.</span>
         </li>
