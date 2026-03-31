@@ -260,7 +260,7 @@ h2{margin:0; font-size:18px}
 .table{margin-top: 10px; overflow-x:auto}
 .tr{
   display:grid;
-  grid-template-columns: 180px minmax(140px,1fr) minmax(180px,300px) minmax(120px,180px) 190px 170px 110px 80px;
+  grid-template-columns: 160px minmax(80px,1fr) minmax(200px,2fr) minmax(100px,150px) 160px 140px 100px 70px;
   column-gap: 12px;
   align-items:center;
   font-size: 12px;
