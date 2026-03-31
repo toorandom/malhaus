@@ -134,7 +134,19 @@ The containers are configured with `restart: unless-stopped` — they come back 
 
 ---
 
-## Manage API keys (inside the container)
+## Manage API keys — web dashboard (recommended)
+
+Open `https://your-domain.com/admin` in your browser (or click **Login** in the
+header). On first visit you will be asked to create the admin account
+(username + password, min 10 characters). After that you can create/revoke keys
+and change your password from the dashboard.
+
+The new API token is shown **once** immediately after creation — copy it before
+navigating away.
+
+See `README-API-KEY-MGNT.md` for security details and the CLI alternative.
+
+## Manage API keys — CLI (alternative)
 
 ```bash
 docker compose exec malhaus .venv/bin/python manage_keys.py create \
@@ -144,8 +156,6 @@ docker compose exec malhaus .venv/bin/python manage_keys.py list
 
 docker compose exec malhaus .venv/bin/python manage_keys.py revoke <key-id>
 ```
-
-See `README-API-KEY-MGNT.md` for full key management documentation.
 
 ---
 

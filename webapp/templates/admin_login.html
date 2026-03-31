@@ -92,6 +92,17 @@
       color: var(--text);
       text-decoration: none;
     }
+    .captcha-block {
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    .captcha-block img {
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.15);
+      display: block;
+      margin: 0 auto 10px auto;
+      max-width: 100%;
+    }
   </style>
 </head>
 <body class="bg">
@@ -126,6 +137,16 @@
             <label for="confirm_password">Confirm password</label>
             <input id="confirm_password" type="password" name="confirm_password" required autocomplete="new-password">
           </div>
+          {% if captcha_img %}
+          <div class="captcha-block">
+            <img src="data:image/png;base64,{{ captcha_img }}" alt="CAPTCHA" width="220" height="70">
+            <div class="field" style="margin-bottom:0;">
+              <label for="captcha">Enter the code above</label>
+              <input id="captcha" type="text" name="captcha" required autocomplete="off"
+                     maxlength="6" style="text-transform:uppercase; letter-spacing:3px; text-align:center;">
+            </div>
+          </div>
+          {% endif %}
           <button class="submit-btn" type="submit">Create account</button>
         </form>
       {% else %}
@@ -141,6 +162,16 @@
             <label for="password">Password</label>
             <input id="password" type="password" name="password" required autocomplete="current-password">
           </div>
+          {% if captcha_img %}
+          <div class="captcha-block">
+            <img src="data:image/png;base64,{{ captcha_img }}" alt="CAPTCHA" width="220" height="70">
+            <div class="field" style="margin-bottom:0;">
+              <label for="captcha">Enter the code above</label>
+              <input id="captcha" type="text" name="captcha" required autocomplete="off"
+                     maxlength="6" style="text-transform:uppercase; letter-spacing:3px; text-align:center;">
+            </div>
+          </div>
+          {% endif %}
           <button class="submit-btn" type="submit">Log in</button>
         </form>
       {% endif %}

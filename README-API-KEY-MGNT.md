@@ -1,6 +1,28 @@
 # malhaus API Key Management
 
-API keys are managed entirely via the `manage_keys.py` CLI script on the server. There is no web UI — key issuance requires intentional admin action.
+API keys can be managed via the **web admin dashboard** at `/admin` or via the `manage_keys.py` CLI script on the server.
+
+## Web admin dashboard
+
+The easiest way to manage keys is through the browser:
+
+1. Navigate to `https://your-domain.com/admin` (or click **Login** in the header)
+2. On first visit you will be prompted to create the administrator account (username + password, minimum 10 characters)
+3. After logging in you can:
+   - **Create keys** — set a label, per-hour rate limit, and optional expiry date
+   - **Revoke keys** — takes effect immediately
+   - **Change your admin password** — under the "Change password" link
+
+**Security features of the admin login:**
+- CAPTCHA required on every login attempt (image challenge, per-session, single-use)
+- IP blocked for 15 minutes after 5 failed attempts
+- Session expires after 5 minutes of inactivity (captcha also invalidated)
+- Session regenerated on login to prevent session fixation
+- All state-changing routes are CSRF-protected (Flask-WTF)
+
+> The new token is shown **once** immediately after creation. Copy it before navigating away.
+
+---
 
 Keys are stored as **SHA-256 hashes** in `maltriage.db`. The plaintext token is printed once at creation time and never persisted. If it is lost, revoke the key and create a new one.
 

@@ -87,7 +87,7 @@
       <div class="row" style="margin-bottom:10px;">
         <h1 style="margin:0; font-size:22px; font-weight:800;">REST API</h1>
       </div>
-      <p class="note">Submit files and URLs for automated malware analysis. Results appear in the web UI alongside browser submissions. Obtain an API key from the <a href="/admin/keys" style="color:var(--muted); text-decoration:underline dotted;">admin dashboard</a>.</p>
+      <p class="note">Submit files and URLs for automated malware analysis. Results appear in the web UI alongside browser submissions. To obtain an API key, contact the administrator of this malhaus instance — keys are issued via the admin dashboard and may carry a rate limit and expiry date.</p>
     </section>
 
     <!-- Authentication -->
@@ -101,89 +101,173 @@
     <!-- Python Examples -->
     <section class="card">
       <h2 class="section-title">Python examples</h2>
-      <p class="note">All examples use the <a href="https://requests.readthedocs.io" style="color:var(--muted); text-decoration:underline dotted;" target="_blank" rel="noopener">requests</a> library. Install with <span class="mono" style="font-size:12px;">pip install requests</span>.</p>
-<pre><code class="language-python">import time
+      <p class="note">Copy the script below and run it directly. Requires the <a href="https://requests.readthedocs.io" style="color:var(--muted); text-decoration:underline dotted;" target="_blank" rel="noopener">requests</a> library — <span class="mono" style="font-size:12px;">pip install requests</span>.</p>
+<pre><code class="language-python">#!/usr/bin/env python3
+"""
+malhaus-submit — submit files or URLs to a malhaus instance via the REST API.
+
+Usage
+-----
+  # Analyze a file
+  python malhaus_submit.py --file suspicious.exe
+
+  # Analyze with Ghidra decompilation (deeper, slower)
+  python malhaus_submit.py --file binary.exe --ghidra
+
+  # Submit a URL
+  python malhaus_submit.py --url https://example.com/payload.ps1
+
+  # Submit an encrypted archive (ZIP / 7z / RAR)
+  python malhaus_submit.py --file malware.zip --password infected
+
+  # Override server / key for this run
+  python malhaus_submit.py --file sample.exe --server https://malhaus.example.com --key mh_xxx
+
+Environment variables (used when --server / --key are not passed):
+  MALHAUS_URL   base URL of the malhaus instance
+  MALHAUS_KEY   your API key  (mh_…)
+"""
+
+import argparse
+import os
+import sys
+import time
 import requests
 
-BASE_URL = "https://your-malhaus-instance.example.com"
-API_KEY  = "mh_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# ── Default configuration ──────────────────────────────────────────────────────
+DEFAULT_SERVER = os.environ.get("MALHAUS_URL", "https://your-malhaus-instance.example.com")
+DEFAULT_KEY    = os.environ.get("MALHAUS_KEY",  "mh_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+POLL_INTERVAL  = 5   # seconds between status checks
 
-HEADERS = {"X-Api-Key": API_KEY}
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+def submit(server: str, key: str, args: argparse.Namespace) -> str:
+    """Submit a file or URL and return the job_id."""
+    headers = {"X-Api-Key": key}
+    endpoint = f"{server}/api/v1/analyze"
+
+    if args.file:
+        path = args.file
+        extra = {}
+        if args.password:
+            extra["archive_password"] = args.password   # encrypted ZIP / 7z / RAR
+        if args.ghidra:
+            extra["use_ghidra"] = "1"                   # Ghidra decompilation (takes longer)
+
+        with open(path, "rb") as fh:
+            resp = requests.post(
+                endpoint,
+                headers=headers,
+                files={"file": (os.path.basename(path), fh, "application/octet-stream")},
+                data=extra,
+                timeout=120,
+            )
+    elif args.url:
+        extra = {}
+        if args.ghidra:
+            extra["use_ghidra"] = "1"
+        resp = requests.post(
+            endpoint,
+            headers=headers,
+            data={"url": args.url, **extra},
+            timeout=120,
+        )
+    else:
+        print("error: provide --file or --url", file=sys.stderr)
+        sys.exit(1)
+
+    if resp.status_code == 401:
+        print("error: API key rejected (401 Unauthorized)", file=sys.stderr)
+        sys.exit(1)
+    if resp.status_code == 429:
+        print("error: rate limit exceeded (429). Try again later.", file=sys.stderr)
+        sys.exit(1)
+    resp.raise_for_status()
+    return resp.json()["job_id"]
 
 
-# ── 1. Analyze a file ─────────────────────────────────────────────────────────
-with open("/path/to/suspicious.exe", "rb") as fh:
-    resp = requests.post(
-        f"{BASE_URL}/api/v1/analyze",
-        headers=HEADERS,
-        files={"file": ("suspicious.exe", fh, "application/octet-stream")},
+def poll(server: str, key: str, job_id: str) -> dict:
+    """Poll until the job is done or failed. Returns the result dict."""
+    headers = {"X-Api-Key": key}
+    url = f"{server}/api/v1/jobs/{job_id}"
+    while True:
+        resp = requests.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        status = data.get("status", "unknown")
+        print(f"  [{status}]", flush=True)
+        if status in ("done", "error"):
+            return data
+        time.sleep(POLL_INTERVAL)
+
+
+def print_result(data: dict) -> None:
+    """Print a human-readable summary of a completed job."""
+    if data.get("status") == "error":
+        print("Analysis failed:", data.get("error"))
+        return
+
+    r = data.get("result", {})
+    risk       = r.get("risk_level", "unknown")
+    confidence = r.get("confidence", "?")
+    reasons    = r.get("top_reasons", [])
+    tools      = r.get("tools_used", [])
+    sha256     = data.get("sha256", r.get("sha256", ""))
+
+    print(f"\n{'─'*60}")
+    print(f"  risk       : {risk.upper()}")
+    print(f"  confidence : {confidence}")
+    if sha256:
+        print(f"  sha256     : {sha256}")
+    print(f"\n  Top reasons:")
+    for reason in reasons[:5]:
+        print(f"    • {reason}")
+    if tools:
+        print(f"\n  Tools used : {', '.join(tools)}")
+
+    # IOCs — only print non-empty categories
+    iocs = r.get("iocs", {})
+    ioc_lines = [
+        f"    {k}: {', '.join(v)}"
+        for k, v in iocs.items() if v
+    ]
+    if ioc_lines:
+        print(f"\n  IOCs extracted:")
+        for line in ioc_lines:
+            print(line)
+    print(f"{'─'*60}\n")
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(
+        prog="malhaus_submit",
+        description="Submit a file or URL to malhaus for static malware analysis.",
     )
-resp.raise_for_status()
-job_id = resp.json()["job_id"]
-print("Submitted. job_id =", job_id)
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--file",     metavar="PATH", help="Path to the file to analyse")
+    src.add_argument("--url",      metavar="URL",  help="URL to download and analyse")
+    parser.add_argument("--password", metavar="PW",  default="",
+                        help="Password for encrypted ZIP / 7z / RAR archives")
+    parser.add_argument("--ghidra", action="store_true",
+                        help="Enable Ghidra decompilation (deeper analysis, takes longer)")
+    parser.add_argument("--server", metavar="URL",  default=DEFAULT_SERVER,
+                        help="malhaus base URL (default: $MALHAUS_URL or hard-coded above)")
+    parser.add_argument("--key",    metavar="KEY",  default=DEFAULT_KEY,
+                        help="API key (default: $MALHAUS_KEY or hard-coded above)")
+    args = parser.parse_args()
+
+    target = args.file or args.url
+    print(f"Submitting: {target}")
+    job_id = submit(args.server, args.key, args)
+    print(f"Job ID: {job_id}")
+    print("Polling for results…")
+    result = poll(args.server, args.key, job_id)
+    print_result(result)
 
 
-# ── 2. Analyze a file with Ghidra decompilation enabled ───────────────────────
-#  Ghidra analysis is deeper but may take several minutes (it is Java after all).
-with open("/path/to/binary.exe", "rb") as fh:
-    resp = requests.post(
-        f"{BASE_URL}/api/v1/analyze",
-        headers=HEADERS,
-        files={"file": ("binary.exe", fh, "application/octet-stream")},
-        data={"use_ghidra": "1"},
-    )
-job_id = resp.json()["job_id"]
-
-
-# ── 3. Submit a URL ───────────────────────────────────────────────────────────
-resp = requests.post(
-    f"{BASE_URL}/api/v1/analyze",
-    headers=HEADERS,
-    data={"url": "https://example.com/suspicious-payload.ps1"},
-)
-job_id = resp.json()["job_id"]
-
-
-# ── 4. Submit an encrypted ZIP or 7z ─────────────────────────────────────────
-#  Common malware delivery: password-protected archives. Pass the password via
-#  the archive_password field so malhaus can extract and analyse the contents.
-with open("/path/to/sample.zip", "rb") as fh:
-    resp = requests.post(
-        f"{BASE_URL}/api/v1/analyze",
-        headers=HEADERS,
-        files={"file": ("sample.zip", fh, "application/zip")},
-        data={"archive_password": "infected"},
-    )
-job_id = resp.json()["job_id"]
-
-
-# ── 5. Poll for results ───────────────────────────────────────────────────────
-#  Jobs are asynchronous. Poll until status == "done" or "error".
-#  Typical analysis takes 10–60 s; Ghidra jobs can take several minutes.
-while True:
-    poll = requests.get(
-        f"{BASE_URL}/api/v1/jobs/{job_id}",
-        headers=HEADERS,
-    )
-    poll.raise_for_status()
-    data = poll.json()
-    status = data.get("status")
-    print(f"  status: {status}")
-    if status in ("done", "error"):
-        break
-    time.sleep(5)
-
-
-# ── 6. Print verdict fields ───────────────────────────────────────────────────
-if status == "done":
-    result = data["result"]
-    print("risk_level  :", result.get("risk_level"))    # benign / suspicious / likely_malware
-    print("confidence  :", result.get("confidence"))    # high / medium / low
-    print("top_reasons :", result.get("top_reasons"))   # list[str]
-    print("iocs        :", result.get("iocs"))          # dict of extracted indicators
-    print("tools_used  :", result.get("tools_used"))    # list[str]
-else:
-    print("Analysis failed:", data.get("error"))
+if __name__ == "__main__":
+    main()
 </code></pre>
     </section>
 
