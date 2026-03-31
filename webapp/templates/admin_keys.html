@@ -52,13 +52,27 @@
 
     /* Status badges */
     .status-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; border:1px solid rgba(255,255,255,.12); }
-    .status-badge.active  { border-color:rgba(42,214,124,.4);  color:var(--green); background:rgba(42,214,124,.1); }
-    .status-badge.expired { border-color:rgba(240,198,74,.4);  color:var(--yellow); background:rgba(240,198,74,.1); }
-    .status-badge.revoked { border-color:rgba(255,77,77,.35);  color:var(--red);    background:rgba(255,77,77,.08); }
+    .status-badge.active        { border-color:rgba(42,214,124,.4);  color:var(--green);  background:rgba(42,214,124,.1); }
+    .status-badge.expired       { border-color:rgba(240,198,74,.4);  color:var(--yellow); background:rgba(240,198,74,.1); }
+    .status-badge.revoked       { border-color:rgba(255,77,77,.35);  color:var(--red);    background:rgba(255,77,77,.08); }
+    .status-badge.benign        { border-color:rgba(42,214,124,.4);  color:var(--green);  background:rgba(42,214,124,.1); }
+    .status-badge.suspicious    { border-color:rgba(240,198,74,.4);  color:var(--yellow); background:rgba(240,198,74,.1); }
+    .status-badge.likely_malware{ border-color:rgba(255,77,77,.35);  color:var(--red);    background:rgba(255,77,77,.08); }
 
     /* Revoke button */
     .revoke-btn { font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid rgba(255,77,77,.35); background:rgba(255,77,77,.08); color:var(--red); cursor:pointer; font-weight:600; }
     .revoke-btn:hover { background:rgba(255,77,77,.18); }
+
+    /* Delete button */
+    .delete-btn { font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid rgba(255,77,77,.35); background:rgba(255,77,77,.08); color:var(--red); cursor:pointer; font-weight:600; }
+    .delete-btn:hover { background:rgba(255,77,77,.18); }
+
+    /* Analyses table */
+    .analyses-table { width:100%; border-collapse:collapse; margin-top:10px; font-size:12px; }
+    .analyses-table th { text-align:left; color:var(--muted); font-size:11px; font-weight:600; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.10); }
+    .analyses-table td { padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.06); vertical-align:middle; }
+    .analyses-table tr:last-child td { border-bottom:none; }
+    .analyses-table tr:hover td { background:rgba(255,255,255,.02); }
 
     .empty-msg { color:var(--muted); font-size:13px; padding:16px 0; }
   </style>
@@ -166,6 +180,55 @@
         </div>
       {% else %}
         <div class="empty-msg">No API keys yet. Create one above.</div>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <div class="row" style="margin-bottom:14px;">
+        <h2 style="font-size:15px; margin:0;">Recent analyses</h2>
+        <span class="muted" style="font-size:12px;">Latest 200 — delete removes from the index and cache</span>
+      </div>
+      {% if analyses %}
+        <div style="overflow-x:auto;">
+          <table class="analyses-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>File</th>
+                <th>SHA-256</th>
+                <th>Type</th>
+                <th>IP</th>
+                <th>Risk</th>
+                <th>Score</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for a in analyses %}
+              <tr>
+                <td class="mono muted" style="white-space:nowrap;">{{ a.analyzed_at }}</td>
+                <td class="mono" style="word-break:break-word; max-width:160px;">{{ a.filename }}</td>
+                <td class="mono muted" style="font-size:10px; word-break:break-all;">
+                  <a href="{{ url_for('bp.report_sha', sha256=a.sha256) }}" style="color:var(--muted); text-decoration:none; border-bottom:1px solid rgba(255,255,255,.2);">{{ a.sha256 }}</a>
+                </td>
+                <td class="mono muted">{{ a.kind }}</td>
+                <td class="mono muted">{{ a.ip or '—' }}</td>
+                <td><span class="status-badge {{ a.risk_level }}">{{ a.risk_level }}</span></td>
+                <td class="mono">{{ a.score }}</td>
+                <td>
+                  <form method="post" action="{{ url_for('admin_bp.analyses_delete', sha256=a.sha256) }}" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="delete-btn" type="submit"
+                      onclick="return confirm('Delete analysis for {{ a.filename }}? This removes it from the index.')">Delete</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-msg">No analyses yet.</div>
       {% endif %}
     </section>
 

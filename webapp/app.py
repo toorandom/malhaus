@@ -4,6 +4,7 @@ import sqlite3
 import time
 from flask import Flask, render_template, request, session, redirect, url_for
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 from PIL import Image, ImageOps
 from captcha.image import ImageCaptcha
 import random
@@ -59,6 +60,9 @@ def _captcha_verify_and_delete(token: str, user_answer: str) -> bool:
 
 def create_app():
     app = Flask(__name__)
+    # Trust exactly one proxy (Apache/nginx) so X-Forwarded-For is resolved
+    # correctly and cannot be spoofed by clients.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     secret_key = os.environ.get("MALHAUS_SECRET_KEY", "")
     if not secret_key:

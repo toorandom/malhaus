@@ -60,11 +60,10 @@ def _format_ts(ts: int | None) -> str:
 
 
 def _client_ip() -> str:
-    return (
-        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        or request.remote_addr
-        or "unknown"
-    )
+    # ProxyFix (configured in app.py) resolves the real client IP into
+    # request.remote_addr, so we no longer need to parse X-Forwarded-For
+    # manually (which would allow header spoofing to bypass IP blocking).
+    return request.remote_addr or "unknown"
 
 
 def _db():
@@ -272,6 +271,30 @@ def captcha_image():
                     headers={"Cache-Control": "no-store, no-cache"})
 
 
+def _list_analyses(limit: int = 200) -> list[dict]:
+    con = _db()
+    try:
+        rows = con.execute(
+            "SELECT analyzed_at, filename, sha256, kind, risk_level, confidence, score, ip "
+            "FROM web_recents ORDER BY analyzed_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def _delete_analysis(sha256: str) -> int:
+    """Delete all web_recents rows for a given sha256. Returns number of rows deleted."""
+    con = _db()
+    try:
+        cur = con.execute("DELETE FROM web_recents WHERE sha256 = ?", (sha256,))
+        con.commit()
+        return cur.rowcount
+    finally:
+        con.close()
+
+
 @admin_bp.route("/keys")
 @_require_admin
 def keys():
@@ -290,6 +313,7 @@ def keys():
     return render_template(
         "admin_keys.html",
         keys=all_keys,
+        analyses=_list_analyses(),
         username=session.get("admin_username", "admin"),
     )
 
@@ -327,6 +351,17 @@ def keys_create():
 def keys_revoke(key_id: str):
     revoke_key(key_id)
     flash("Key revoked.", "success")
+    return redirect(url_for("admin_bp.keys"))
+
+
+@admin_bp.route("/analyses/<sha256>/delete", methods=["POST"])
+@_require_admin
+def analyses_delete(sha256: str):
+    if not sha256 or len(sha256) != 64 or not all(c in "0123456789abcdef" for c in sha256):
+        flash("Invalid SHA-256.", "error")
+        return redirect(url_for("admin_bp.keys"))
+    n = _delete_analysis(sha256)
+    flash(f"Analysis deleted ({sha256[:16]}…)." if n else "Entry not found.", "success" if n else "error")
     return redirect(url_for("admin_bp.keys"))
 
 
