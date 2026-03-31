@@ -123,7 +123,7 @@
         <div class="tr">
           <div class="mono muted">{{ r["analyzed_at"] }}</div>
           <div class="mono break">{{ r["filename"] }}</div>
-          <div class="mono break">{% if r["sha256"] %}<a class="hashlink mono" style="text-decoration:underline" href="{{ url_for('bp.report_sha', sha256=r['sha256']) }}">{{ r["sha256"] }}</a>{% else %}—{% endif %}</div>
+          <div class="mono break">{% if r["sha256"] %}<a class="hashlink mono" href="{{ url_for('bp.report_sha', sha256=r['sha256']) }}">{{ r["sha256"] }}</a>{% else %}—{% endif %}</div>
           <div class="mono muted">{{ r["kind"] }}</div>
           <div class="mono muted">{{ r["ip"] if "ip" in r.keys() else "—" }}</div>
           <div><span class="badge {{ r["risk_level"] }}">{{ r["risk_level"] }}</span></div>
