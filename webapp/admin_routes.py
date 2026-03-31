@@ -274,6 +274,14 @@ def captcha_image():
 def _list_analyses(limit: int = 200) -> list[dict]:
     con = _db()
     try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS web_recents (
+                analyzed_at TEXT NOT NULL, filename TEXT NOT NULL,
+                sha256 TEXT NOT NULL, kind TEXT NOT NULL,
+                risk_level TEXT NOT NULL, confidence INTEGER NOT NULL,
+                score INTEGER NOT NULL, ip TEXT, report_json TEXT
+            )
+        """)
         rows = con.execute(
             "SELECT analyzed_at, filename, sha256, kind, risk_level, confidence, score, ip "
             "FROM web_recents ORDER BY analyzed_at DESC LIMIT ?",
