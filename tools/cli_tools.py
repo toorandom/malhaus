@@ -897,12 +897,18 @@ def pdf_analysis(path: str) -> Dict[str, Any]:
 def lnk_analysis(path: str) -> Dict[str, Any]:
     """Parse Windows LNK shortcut: extract target path, arguments, working dir, metadata."""
     import json as _json
+    from datetime import datetime as _dt
+    class _DTEncoder(_json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, _dt):
+                return obj.isoformat()
+            return super().default(obj)
     try:
         import LnkParse3
         with open(path, "rb") as fh:
             lnk = LnkParse3.lnk_file(fh)
         info = lnk.get_json()
-        stdout = _json.dumps(info, indent=2, ensure_ascii=False)[:8000]
+        stdout = _json.dumps(info, indent=2, ensure_ascii=False, cls=_DTEncoder)[:8000]
         return {"ok": True, "lnk": info, "stdout": stdout}
     except ImportError:
         pass
