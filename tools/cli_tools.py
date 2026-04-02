@@ -908,7 +908,10 @@ def lnk_analysis(path: str) -> Dict[str, Any]:
         with open(path, "rb") as fh:
             lnk = LnkParse3.lnk_file(fh)
         info = lnk.get_json()
-        stdout = _json.dumps(info, indent=2, ensure_ascii=False, cls=_DTEncoder)[:8000]
+        # Round-trip through JSON to convert all datetime objects to strings
+        # so the returned dict is always JSON-serializable downstream.
+        info = _json.loads(_json.dumps(info, cls=_DTEncoder))
+        stdout = _json.dumps(info, indent=2, ensure_ascii=False)[:8000]
         return {"ok": True, "lnk": info, "stdout": stdout}
     except ImportError:
         pass
