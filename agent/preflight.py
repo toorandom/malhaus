@@ -17,6 +17,7 @@ from tools.cli_tools import (
     pe_section_entropy,
     dotnet_analysis,
     binwalk_scan,
+    pe_meta_structured,
     jar_manifest, jarsigner_verify, jar_class_list, javap_disasm, jar_extract_inner,
 )
 
@@ -167,6 +168,8 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         pre["mandatory_dotnet_analysis"] = dotnet_analysis(sample)
         cb("binwalk: embedded signature scan")
         pre["mandatory_binwalk"] = binwalk_scan(sample)
+        cb("PE: structured metadata (timestamp, version info)")
+        pre["mandatory_pe_meta"] = pe_meta_structured(sample)
 
         if options.get("use_ghidra"):
             cb("Ghidra: full scan (this takes a while…)")

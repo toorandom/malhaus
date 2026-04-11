@@ -516,6 +516,58 @@ def pe_imphash(path: str) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+@tool
+def pe_meta_structured(path: str) -> Dict[str, Any]:
+    """Extract structured PE metadata: compile timestamp, version strings, file size, signed status."""
+    import datetime
+    try:
+        pe = pefile.PE(path, fast_load=False)
+        ts = pe.FILE_HEADER.TimeDateStamp
+        try:
+            compile_dt = datetime.datetime.utcfromtimestamp(ts).isoformat() + "Z"
+        except (OSError, OverflowError, ValueError):
+            compile_dt = None
+
+        version_info: Dict[str, str] = {}
+        if hasattr(pe, "VS_VERSIONINFO"):
+            for entry in (pe.VS_VERSIONINFO or []):
+                if hasattr(entry, "StringFileInfo"):
+                    for sfi in (entry.StringFileInfo or []):
+                        for st in (sfi.StringTable or []):
+                            for k, v in (st.entries or {}).items():
+                                try:
+                                    version_info[k.decode(errors="replace")] = v.decode(errors="replace")
+                                except Exception:
+                                    pass
+
+        file_size = Path(path).stat().st_size
+
+        # Check authenticode via osslsigncode text output (already done in preflight,
+        # but we parse it here too so pe_meta is self-contained)
+        signed = None
+        try:
+            r = subprocess.run(["osslsigncode", "verify", "-in", path],
+                               capture_output=True, text=True, timeout=20)
+            out = (r.stdout or "") + (r.stderr or "")
+            if r.returncode == 0 and "Signature verification" in out:
+                signed = True
+            elif "No signature found" in out or "FAILED" in out or r.returncode != 0:
+                signed = False
+        except Exception:
+            signed = None
+
+        return {
+            "ok": True,
+            "compile_timestamp": ts,
+            "compile_datetime": compile_dt,
+            "version_info": version_info,
+            "file_size": file_size,
+            "signed": signed,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 # ---------------- ELF (more low-level visibility) ----------------
 
 @tool

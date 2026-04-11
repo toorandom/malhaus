@@ -295,4 +295,14 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
     dotnet_result = preflight.get("mandatory_dotnet_analysis") or {}
     if dotnet_result.get("capabilities"):
         pack["dotnet_capabilities"] = dotnet_result["capabilities"]
+    # Pass structured PE metadata to heuristics (compile timestamp, version info, signed)
+    pe_meta = preflight.get("mandatory_pe_meta") or {}
+    if pe_meta.get("ok"):
+        pack["pe_meta"] = {
+            "compile_timestamp": pe_meta.get("compile_timestamp"),
+            "compile_datetime": pe_meta.get("compile_datetime"),
+            "version_info": pe_meta.get("version_info") or {},
+            "file_size": pe_meta.get("file_size"),
+            "signed": pe_meta.get("signed"),
+        }
     return pack

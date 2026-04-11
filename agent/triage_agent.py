@@ -240,7 +240,7 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
                 "radare2_quick_json", "radare2_entry_disasm", "pe_section_entropy",
                 "floss_strings", "entropy_shannon", "sha256", "file_info",
                 "upx_detect", "upx_unpack", "strings_ascii", "extract_payloads",
-                "dotnet_analysis", "binwalk_scan"},
+                "dotnet_analysis", "binwalk_scan", "pe_meta_structured"},
         "elf": {"readelf_all", "objdump_elf_dynamic", "ldd_deps",
                 "floss_strings", "entropy_shannon", "sha256", "file_info",
                 "upx_detect", "upx_unpack", "strings_ascii", "extract_payloads",

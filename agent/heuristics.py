@@ -1,3 +1,4 @@
+import datetime
 from typing import Any, Dict, List
 
 def _clamp_int(x: Any, lo: int = 0, hi: int = 100) -> int:
@@ -68,6 +69,70 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
     real_payloads = [x for x in extracted if _looks_like_real_payload(x)]
     if real_payloads:
         score += 8; reasons.append(f"Embedded/extracted payloads present ({len(real_payloads)} likely payload files).")
+
+    # PE structured metadata signals
+    pe_meta = ev.get("pe_meta") or {}
+    if pe_meta:
+        # Future compilation timestamp
+        ts = pe_meta.get("compile_timestamp")
+        if isinstance(ts, int) and ts > 0:
+            try:
+                compile_year = datetime.datetime.utcfromtimestamp(ts).year
+                current_year = datetime.datetime.utcnow().year
+                years_ahead = compile_year - current_year
+                if years_ahead >= 2:
+                    score += 25
+                    reasons.append(
+                        f"PE compile timestamp is {years_ahead} years in the future ({compile_year}): "
+                        "strong indicator of timestamp manipulation / masquerading."
+                    )
+                elif years_ahead == 1:
+                    score += 10
+                    reasons.append(
+                        f"PE compile timestamp is 1 year in the future ({compile_year}): possible timestamp manipulation."
+                    )
+            except (OSError, OverflowError, ValueError):
+                pass
+
+        # Unsigned binary claiming Microsoft authorship
+        signed = pe_meta.get("signed")
+        version_info = pe_meta.get("version_info") or {}
+        company = (version_info.get("CompanyName") or "").lower()
+        file_desc = (version_info.get("FileDescription") or "").lower()
+        orig_name = (version_info.get("OriginalFilename") or "").lower()
+        legal_copy = (version_info.get("LegalCopyright") or "").lower()
+        claims_microsoft = any(
+            "microsoft" in s for s in [company, file_desc, legal_copy, orig_name]
+        )
+        if signed is False and claims_microsoft:
+            score += 30
+            reasons.append(
+                "Unsigned PE claims Microsoft authorship in version strings "
+                f"(CompanyName='{version_info.get('CompanyName','')}', "
+                f"OriginalFilename='{version_info.get('OriginalFilename','')}') "
+                "but has no valid Authenticode signature: high-confidence masquerading."
+            )
+        elif signed is False and ev.get("kind") == "pe":
+            # Just being unsigned is a mild signal (many legitimate tools are unsigned)
+            pass  # not penalized alone
+
+    # IOC counts from deterministic extraction (domains, IPs, URLs)
+    iocs_det = ev.get("iocs_deterministic") or {}
+    n_domains = len(iocs_det.get("domains") or [])
+    n_ips = len(iocs_det.get("ips") or [])
+    n_urls = len(iocs_det.get("urls") or [])
+    if n_urls >= 3:
+        score += 8; reasons.append(f"Multiple embedded URLs found ({n_urls}).")
+    elif n_urls >= 1:
+        score += 4; reasons.append(f"Embedded URL(s) found ({n_urls}).")
+    if n_ips >= 3:
+        score += 8; reasons.append(f"Multiple embedded IP addresses found ({n_ips}).")
+    elif n_ips == 1 or n_ips == 2:
+        score += 4; reasons.append(f"Embedded IP address(es) found ({n_ips}).")
+    if n_domains >= 5:
+        score += 6; reasons.append(f"High number of embedded domain strings ({n_domains}).")
+    elif n_domains >= 2:
+        score += 3; reasons.append(f"Embedded domain strings found ({n_domains}).")
 
     # .NET capability signals from dnfile analysis
     dotnet = ev.get("dotnet_capabilities") or {}
