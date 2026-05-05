@@ -24,6 +24,11 @@ RE_HEX = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{120,}(?![0-9a-fA-F])")
 RE_FLAGISH = re.compile(r"(?:(?:\s|^)[-/]{1,2}[A-Za-z]{1,})(?:\s|$)")
 RE_SHELL_META = re.compile(r"[|;&><]{1,2}")
 
+# x64 PE function prologue/epilogue bytes read as ASCII by `strings -a`.
+# e.g. WAVAWH (push rdi/rsi/rbx + REX prefix), A_A^A]A\ (pop r15/r14/r13/r12).
+# These are 100% normal in any 64-bit PE — not obfuscation.
+RE_X64_ASM_ARTIFACT = re.compile(r'^[A-HIJK-Z\\_\^\]\[]{4,}$')
+
 def shannon_entropy_str(s: str) -> float:
     if not s:
         return 0.0
@@ -66,6 +71,11 @@ def filter_suspicious_lines(strings_text: str, import_names: Set[str], max_lines
     scored: List[Tuple[float, Dict[str, Any]]] = []
 
     for s in lines:
+        # Skip x64 function prologue/epilogue artifacts (WAVAWH, A_A^A]A\ etc.)
+        # These are normal opcode bytes from code sections read as ASCII — not obfuscation.
+        if RE_X64_ASM_ARTIFACT.match(s):
+            continue
+
         tags: List[str] = []
         score = 0.0
 

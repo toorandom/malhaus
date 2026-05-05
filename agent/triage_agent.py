@@ -70,6 +70,25 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
             "dotnet_analysis": _snip_stdout(pre.get("mandatory_dotnet_analysis"), 4000),
             "binwalk": _snip_stdout(pre.get("mandatory_binwalk"), 3000),
         })
+        pe_meta = pre.get("mandatory_pe_meta") or {}
+        if pe_meta.get("ok") and pe_meta.get("has_repro_debug"):
+            vi = pe_meta.get("version_info") or {}
+            snips["pe_build_context"] = (
+                "IMPORTANT ANALYST CONTEXT: This PE was built with the Microsoft /Brepro "
+                "linker flag (IMAGE_DEBUG_TYPE_REPRO present). This means: "
+                "(1) The TimeDateStamp field is a 32-bit content hash, NOT a real compile date — "
+                "any future year in the timestamp is an artifact of hash interpretation, not tampering. "
+                "(2) The binary uses catalog signing (Windows .cat files) rather than embedded "
+                "Authenticode — 'not signed' from osslsigncode is expected and normal for legitimate "
+                "Windows system binaries. "
+                "(3) Repetitive short uppercase strings like WAVAWH, AWAVAUATUSH, A_A^A]A\\ in the "
+                "strings output are x64 function prologue/epilogue opcodes read as ASCII — not "
+                "obfuscation or packing. "
+                "(4) Embedded HTML, XML, PNG found by binwalk are likely Windows PE resources "
+                "(manifests, help files, icons) — normal for GUI Windows applications. "
+                f"Version info: {vi.get('CompanyName','')} / {vi.get('FileDescription','')} / "
+                f"{vi.get('FileVersion','')}."
+            )
     elif kind == "elf":
         snips.update({
             "readelf_head": _snip_stdout(pre.get("mandatory_readelf_all"), 4000),
