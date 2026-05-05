@@ -301,6 +301,7 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         pack["pe_meta"] = {
             "compile_timestamp": pe_meta.get("compile_timestamp"),
             "compile_datetime": pe_meta.get("compile_datetime"),
+            "has_repro_debug": pe_meta.get("has_repro_debug", False),
             "version_info": pe_meta.get("version_info") or {},
             "file_size": pe_meta.get("file_size"),
             "signed": pe_meta.get("signed"),

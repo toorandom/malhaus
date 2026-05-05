@@ -73,9 +73,16 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
     # PE structured metadata signals
     pe_meta = ev.get("pe_meta") or {}
     if pe_meta:
+        has_repro = pe_meta.get("has_repro_debug", False)
+
         # Future compilation timestamp
+        # If IMAGE_DEBUG_TYPE_REPRO (0x10) is present the TimeDateStamp is a 32-bit
+        # content hash — NOT a real date. Microsoft builds all modern Windows system
+        # binaries this way (/Brepro flag). Penalising this causes false positives on
+        # legitimate Windows binaries like conhost.exe (timestamp year 2096).
+        # Only penalise when the repro debug entry is absent (real timestamp tampering).
         ts = pe_meta.get("compile_timestamp")
-        if isinstance(ts, int) and ts > 0:
+        if isinstance(ts, int) and ts > 0 and not has_repro:
             try:
                 compile_year = datetime.datetime.utcfromtimestamp(ts).year
                 current_year = datetime.datetime.utcnow().year
@@ -83,18 +90,37 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
                 if years_ahead >= 2:
                     score += 25
                     reasons.append(
-                        f"PE compile timestamp is {years_ahead} years in the future ({compile_year}): "
-                        "strong indicator of timestamp manipulation / masquerading."
+                        f"PE compile timestamp is {years_ahead} years in the future ({compile_year}) "
+                        "with no /Brepro debug entry: strong indicator of timestamp manipulation."
                     )
                 elif years_ahead == 1:
                     score += 10
                     reasons.append(
-                        f"PE compile timestamp is 1 year in the future ({compile_year}): possible timestamp manipulation."
+                        f"PE compile timestamp is 1 year in the future ({compile_year}) "
+                        "with no /Brepro debug entry: possible timestamp manipulation."
+                    )
+            except (OSError, OverflowError, ValueError):
+                pass
+        elif isinstance(ts, int) and ts > 0 and has_repro:
+            # Timestamp is a content hash (reproducible build) — not suspicious.
+            # Note for LLM context only, no score change.
+            try:
+                compile_year = datetime.datetime.utcfromtimestamp(ts).year
+                current_year = datetime.datetime.utcnow().year
+                if compile_year > current_year:
+                    reasons.append(
+                        f"PE compile timestamp appears to be year {compile_year} but "
+                        "IMAGE_DEBUG_TYPE_REPRO is present: timestamp is a content hash "
+                        "(Microsoft /Brepro reproducible build), not a real date — not suspicious."
                     )
             except (OSError, OverflowError, ValueError):
                 pass
 
         # Unsigned binary claiming Microsoft authorship
+        # Legitimate Windows system files are catalog-signed (not embedded Authenticode).
+        # osslsigncode reports "not signed" for these — that is expected and not a red flag
+        # when IMAGE_DEBUG_TYPE_REPRO is also present (consistent MS build pipeline).
+        # Only flag when repro debug is absent: that combination is highly anomalous.
         signed = pe_meta.get("signed")
         version_info = pe_meta.get("version_info") or {}
         company = (version_info.get("CompanyName") or "").lower()
@@ -104,17 +130,21 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
         claims_microsoft = any(
             "microsoft" in s for s in [company, file_desc, legal_copy, orig_name]
         )
-        if signed is False and claims_microsoft:
+        if signed is False and claims_microsoft and not has_repro:
             score += 30
             reasons.append(
                 "Unsigned PE claims Microsoft authorship in version strings "
                 f"(CompanyName='{version_info.get('CompanyName','')}', "
                 f"OriginalFilename='{version_info.get('OriginalFilename','')}') "
-                "but has no valid Authenticode signature: high-confidence masquerading."
+                "with no /Brepro debug entry: high-confidence masquerading."
             )
-        elif signed is False and ev.get("kind") == "pe":
-            # Just being unsigned is a mild signal (many legitimate tools are unsigned)
-            pass  # not penalized alone
+        elif signed is False and claims_microsoft and has_repro:
+            # Catalog-signed Windows system binary — normal, no penalty.
+            reasons.append(
+                f"PE claims Microsoft authorship ('{version_info.get('CompanyName','')}') "
+                "and has no embedded Authenticode signature, but IMAGE_DEBUG_TYPE_REPRO "
+                "is present: consistent with a catalog-signed Windows system binary."
+            )
 
     # IOC counts from deterministic extraction (domains, IPs, URLs)
     iocs_det = ev.get("iocs_deterministic") or {}

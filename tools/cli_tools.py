@@ -518,8 +518,11 @@ def pe_imphash(path: str) -> Dict[str, Any]:
 
 @tool
 def pe_meta_structured(path: str) -> Dict[str, Any]:
-    """Extract structured PE metadata: compile timestamp, version strings, file size, signed status."""
+    """Extract structured PE metadata: compile timestamp, version strings, file size, signed status,
+    and whether the binary was built with /Brepro (reproducible builds — timestamp is a content hash,
+    not a real date). Detected via IMAGE_DEBUG_TYPE_REPRO (type 0x10) in the debug directory."""
     import datetime
+    IMAGE_DEBUG_TYPE_REPRO = 0x10
     try:
         pe = pefile.PE(path, fast_load=False)
         ts = pe.FILE_HEADER.TimeDateStamp
@@ -527,6 +530,16 @@ def pe_meta_structured(path: str) -> Dict[str, Any]:
             compile_dt = datetime.datetime.utcfromtimestamp(ts).isoformat() + "Z"
         except (OSError, OverflowError, ValueError):
             compile_dt = None
+
+        # Detect /Brepro: presence of IMAGE_DEBUG_TYPE_REPRO (0x10) debug entry means
+        # the TimeDateStamp field contains a content hash, NOT a real compile time.
+        # Microsoft uses this for reproducible Windows builds since VS2017.
+        has_repro_debug = False
+        if hasattr(pe, "DIRECTORY_ENTRY_DEBUG"):
+            for dbg in (pe.DIRECTORY_ENTRY_DEBUG or []):
+                if dbg.struct.Type == IMAGE_DEBUG_TYPE_REPRO:
+                    has_repro_debug = True
+                    break
 
         version_info: Dict[str, str] = {}
         if hasattr(pe, "VS_VERSIONINFO"):
@@ -542,8 +555,9 @@ def pe_meta_structured(path: str) -> Dict[str, Any]:
 
         file_size = Path(path).stat().st_size
 
-        # Check authenticode via osslsigncode text output (already done in preflight,
-        # but we parse it here too so pe_meta is self-contained)
+        # Check for embedded Authenticode signature via osslsigncode.
+        # Note: catalog-signed Windows system files will show signed=False here —
+        # that is normal and expected for legitimate MS binaries (not a red flag).
         signed = None
         try:
             r = subprocess.run(["osslsigncode", "verify", "-in", path],
@@ -560,6 +574,7 @@ def pe_meta_structured(path: str) -> Dict[str, Any]:
             "ok": True,
             "compile_timestamp": ts,
             "compile_datetime": compile_dt,
+            "has_repro_debug": has_repro_debug,
             "version_info": version_info,
             "file_size": file_size,
             "signed": signed,
