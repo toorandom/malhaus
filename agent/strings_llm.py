@@ -63,6 +63,15 @@ def _filter_strings_preview(text: str) -> str:
             if distinct_syms > 8:
                 continue
 
+        # Pass 5 — x64 function prologue/epilogue artifact drop:
+        #   Strings like WAVAWH, AWAVAUATUSH, A_A^A]A\ are opcode bytes from x64
+        #   code sections (push/pop register sequences, REX prefixes) read as ASCII
+        #   by `strings -a`. They are present in any 64-bit PE and carry zero
+        #   analytical value — dropping them prevents the LLM from misidentifying
+        #   them as obfuscation or packing artifacts.
+        if re.match(r'^[A-HIJK-Z\\_\^\]\[]{4,}$', s):
+            continue
+
         out.append(line)
     return "\n".join(out)
 
@@ -152,6 +161,7 @@ def analyze_strings_llm(
     strings_preview: str,
     max_chars: int = 20000,
     progress_cb=None,
+    context_note: str | None = None,
 ) -> Dict[str, Any]:
     """
     LLM-only analysis of a short strings preview.
@@ -178,6 +188,7 @@ Return RAW JSON ONLY — no markdown, no code fences, no explanation before or a
 Context:
 - file_type={kind}
 - entropy={file_entropy}
+{f"- analyst_note: {context_note}" if context_note else ""}
 
 Strings preview:
 {sp}

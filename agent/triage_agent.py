@@ -228,6 +228,16 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
             _t = _s2(_key)
             if _t:
                 strings_input += "\n" + _t[:3000]
+    _strings_context_note = None
+    _pe_meta = pre.get("mandatory_pe_meta") or {}
+    if _pe_meta.get("ok") and _pe_meta.get("has_repro_debug"):
+        _strings_context_note = (
+            "This PE has IMAGE_DEBUG_TYPE_REPRO (/Brepro reproducible build). "
+            "Short uppercase strings like WAVAWH/AWAVAUATUSH/A_A^A]A\\ are normal x64 "
+            "opcode sequences read as ASCII — not obfuscation. "
+            "No embedded Authenticode is expected (catalog-signed). "
+            "Embedded HTML/XML/PNG are likely PE resources (manifests, icons)."
+        )
     try:
         strings_llm = analyze_strings_llm(
             model=MODEL_STRINGS,
@@ -236,6 +246,7 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
             strings_preview=strings_input,
             max_chars=20000,
             progress_cb=cb,
+            context_note=_strings_context_note,
         )
     except Exception as _e:
         strings_llm = {"error": f"strings_llm_crashed: {type(_e).__name__}: {_e}",
