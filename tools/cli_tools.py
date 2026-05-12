@@ -143,6 +143,59 @@ def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
     return "unknown"
 
 
+def _extract_signer_info(path: str) -> Dict[str, Any]:
+    """
+    Extract Authenticode signer details from the embedded PKCS#7 chain:
+    - signer_cn / signer_org : leaf cert subject (who actually signed)
+    - issuer_cn  / issuer_org : immediate issuer
+    - is_self_signed          : True when subject == issuer (no trusted CA)
+    - chain_depth             : number of certs in the embedded chain
+    Returns {} on any error or if no signature is present.
+    """
+    try:
+        pe = pefile.PE(path, fast_load=True)
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"]]
+        )
+        sec = pe.OPTIONAL_HEADER.DATA_DIRECTORY[
+            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"]
+        ]
+        if not sec.VirtualAddress or not sec.Size:
+            return {}
+
+        raw_pe = Path(path).read_bytes()
+        pkcs7_blob = raw_pe[sec.VirtualAddress: sec.VirtualAddress + sec.Size]
+        pkcs7_data = pkcs7_blob[8:]  # strip 8-byte WIN_CERTIFICATE header
+
+        from cryptography.hazmat.primitives.serialization import pkcs7 as _pkcs7
+        from cryptography.x509.oid import NameOID as _NameOID
+
+        certs = _pkcs7.load_der_pkcs7_certificates(pkcs7_data)
+        if not certs:
+            return {}
+
+        # Find the leaf signing cert: the one whose subject is not the issuer of any other
+        issuer_subjects = {c.issuer for c in certs}
+        leaf = next((c for c in certs if c.subject not in issuer_subjects), certs[0])
+
+        def _attr(name_obj, oid: Any) -> str:
+            try:
+                return name_obj.get_attributes_for_oid(oid)[0].value or ""
+            except Exception:
+                return ""
+
+        return {
+            "signer_cn":     _attr(leaf.subject, _NameOID.COMMON_NAME),
+            "signer_org":    _attr(leaf.subject, _NameOID.ORGANIZATION_NAME),
+            "issuer_cn":     _attr(leaf.issuer,  _NameOID.COMMON_NAME),
+            "issuer_org":    _attr(leaf.issuer,  _NameOID.ORGANIZATION_NAME),
+            "is_self_signed": leaf.subject == leaf.issuer,
+            "chain_depth":   len(certs),
+        }
+    except Exception:
+        return {}
+
+
 def _fetch_aia_certs(path: str) -> str | None:
     """
     Extract the Authenticode PKCS#7 blob from a PE, walk the certificate chain,
@@ -696,6 +749,8 @@ def pe_meta_structured(path: str) -> Dict[str, Any]:
         else:
             signed = None  # unknown / tool missing
 
+        signer_info = _extract_signer_info(path)
+
         return {
             "ok": True,
             "compile_timestamp": ts,
@@ -704,6 +759,7 @@ def pe_meta_structured(path: str) -> Dict[str, Any]:
             "version_info": version_info,
             "file_size": file_size,
             "signed": signed,
+            "signer_info": signer_info,
         }
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}

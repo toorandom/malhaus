@@ -315,5 +315,6 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
             "version_info": pe_meta.get("version_info") or {},
             "file_size": pe_meta.get("file_size"),
             "signed": pe_meta.get("signed"),
+            "signer_info": pe_meta.get("signer_info") or {},
         }
     return pack

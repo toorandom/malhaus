@@ -157,6 +157,69 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
                 "analyzed on Linux — not a red flag."
             )
 
+        # Signer certificate analysis — self-signed, unknown CA, company mismatch
+        _WELL_KNOWN = {
+            "microsoft", "google", "adobe", "apple", "mozilla",
+            "oracle", "amazon", "intel", "nvidia", "cisco",
+        }
+        signer_info = pe_meta.get("signer_info") or {}
+        if signer_info:
+            signer_org = (signer_info.get("signer_org") or "").lower()
+            signer_cn  = (signer_info.get("signer_cn")  or "").lower()
+            is_self_signed = signer_info.get("is_self_signed", False)
+
+            cert_claims_known  = any(k in signer_org or k in signer_cn  for k in _WELL_KNOWN)
+            vi_claims_known    = claims_microsoft or any(
+                k in company or k in file_desc or k in legal_copy or k in orig_name
+                for k in _WELL_KNOWN
+            )
+
+            if is_self_signed:
+                score += 15
+                reasons.append(
+                    f"PE has a self-signed Authenticode certificate "
+                    f"(signer: '{signer_info.get('signer_org') or signer_info.get('signer_cn', 'unknown')}') "
+                    "— not issued by any trusted CA."
+                )
+                if cert_claims_known:
+                    # Self-signed cert that itself claims to be a well-known company
+                    score += 20
+                    reasons.append(
+                        f"Self-signed certificate claims to be from a well-known company "
+                        f"('{signer_info.get('signer_org','')}') — high-confidence impersonation."
+                    )
+                elif vi_claims_known:
+                    # version_info claims well-known company but cert is self-signed unknown
+                    score += 15
+                    reasons.append(
+                        f"Version info claims '{version_info.get('CompanyName','')}' "
+                        f"but the Authenticode certificate is self-signed by an unknown entity "
+                        f"('{signer_info.get('signer_org') or signer_info.get('signer_cn', '')}')."
+                    )
+
+            elif signed is True:
+                # Chain verified — check for company mismatch between version_info and cert
+                vi_company   = (version_info.get("CompanyName") or "").strip()
+                cert_company = (signer_info.get("signer_org") or "").strip()
+                if vi_company and cert_company:
+                    def _norm(s: str) -> str:
+                        for sfx in [" corporation", " corp", " inc", " ltd", " llc", " co.", " gmbh", " s.a."]:
+                            s = s.lower().replace(sfx, "")
+                        return s.strip()
+                    if vi_claims_known and not cert_claims_known:
+                        score += 20
+                        reasons.append(
+                            f"Version info claims '{vi_company}' but Authenticode is signed by "
+                            f"'{cert_company}': well-known company claimed in metadata but "
+                            "signed by a different entity."
+                        )
+                    elif _norm(vi_company) not in _norm(cert_company) and _norm(cert_company) not in _norm(vi_company):
+                        score += 10
+                        reasons.append(
+                            f"Version info company ('{vi_company}') differs from "
+                            f"Authenticode signer ('{cert_company}')."
+                        )
+
     # IOC counts from deterministic extraction (domains, IPs, URLs)
     iocs_det = ev.get("iocs_deterministic") or {}
     n_domains = len(iocs_det.get("domains") or [])
