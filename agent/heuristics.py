@@ -145,6 +145,17 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
                 "and has no embedded Authenticode signature, but IMAGE_DEBUG_TYPE_REPRO "
                 "is present: consistent with a catalog-signed Windows system binary."
             )
+        elif signed is None and claims_microsoft:
+            # Signature is present and digest intact, but the Linux CA store is missing
+            # the issuer root certificate (common for Microsoft root CAs).
+            # This is NOT unsigned — treat as signed for scoring purposes.
+            reasons.append(
+                f"PE claims Microsoft authorship ('{version_info.get('CompanyName','')}') "
+                "and has an embedded Authenticode signature with matching digest, but the "
+                "certificate chain could not be verified locally (Linux CA store missing "
+                "Microsoft root CA). This is expected for legitimate Microsoft software "
+                "analyzed on Linux — not a red flag."
+            )
 
     # IOC counts from deterministic extraction (domains, IPs, URLs)
     iocs_det = ev.get("iocs_deterministic") or {}

@@ -143,22 +143,149 @@ def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
     return "unknown"
 
 
+def _fetch_aia_certs(path: str) -> str | None:
+    """
+    Extract the Authenticode PKCS#7 blob from a PE, walk the certificate chain,
+    follow AIA (Authority Information Access) caIssuers URLs to download any
+    missing issuer certificates, and return a path to a temporary PEM bundle
+    containing all fetched certs. Returns None if nothing was fetched or on error.
+    This lets osslsigncode verify chains whose root CA is absent from the local store.
+    """
+    import tempfile, urllib.request, urllib.error
+    try:
+        pe = pefile.PE(path, fast_load=True)
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"]]
+        )
+        sec = pe.OPTIONAL_HEADER.DATA_DIRECTORY[
+            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"]
+        ]
+        if not sec.VirtualAddress or not sec.Size:
+            return None
+
+        # The security directory contains the PKCS#7 blob directly (not an RVA)
+        raw_pe = Path(path).read_bytes()
+        pkcs7_blob = raw_pe[sec.VirtualAddress: sec.VirtualAddress + sec.Size]
+        # Strip the 8-byte WIN_CERTIFICATE header (dwLength, wRevision, wCertificateType)
+        pkcs7_data = pkcs7_blob[8:]
+
+        from cryptography.hazmat.primitives.serialization import pkcs7 as _pkcs7
+        from cryptography import x509 as _x509
+        from cryptography.hazmat.primitives import hashes as _hashes
+        from cryptography.x509.oid import ExtensionOID as _ExtOID
+        from cryptography.hazmat.backends import default_backend as _be
+
+        certs = _pkcs7.load_der_pkcs7_certificates(pkcs7_data)
+        fetched_pems: list[bytes] = []
+
+        for cert in certs:
+            try:
+                aia = cert.extensions.get_extension_for_oid(_ExtOID.AUTHORITY_INFORMATION_ACCESS)
+                for access in aia.value:
+                    if access.access_method.dotted_string == "1.3.6.1.5.5.7.48.2":  # caIssuers
+                        url = access.access_location.value
+                        try:
+                            req = urllib.request.Request(url, headers={"User-Agent": "malhaus/1.0"})
+                            with urllib.request.urlopen(req, timeout=10) as resp:
+                                data = resp.read()
+                            # Could be DER or PEM
+                            if b"-----BEGIN" in data:
+                                fetched_pems.append(data)
+                            else:
+                                # DER → PEM
+                                issuer_cert = _x509.load_der_x509_certificate(data, _be())
+                                from cryptography.hazmat.primitives.serialization import Encoding
+                                fetched_pems.append(issuer_cert.public_bytes(Encoding.PEM))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        if not fetched_pems:
+            return None
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+        for pem in fetched_pems:
+            tmp.write(pem + b"\n")
+        # Also append system bundle so the full chain is available
+        system_bundle = Path("/etc/ssl/certs/ca-certificates.crt")
+        if system_bundle.exists():
+            tmp.write(system_bundle.read_bytes())
+        tmp.flush()
+        tmp.close()
+        return tmp.name
+    except Exception:
+        return None
+
+
 def authenticode_verify(path: str) -> Dict:
     """
-    Offline Authenticode verification (PE). Ground truth:
-    - OK/Verified
-    - Unsigned / no signature
-    - Invalid signature / verification failure
+    Offline Authenticode verification (PE).
+    First attempts verification with the system CA bundle. If that fails due to a
+    missing issuer certificate, automatically fetches the required CA certs via AIA
+    (Authority Information Access) URLs embedded in the signing certificate chain and
+    retries. This handles common cases like Microsoft Root CA 2010/2011 being absent
+    from the Linux system store.
+    Status codes prepended to output:
+      SIGNATURE_VERIFIED                              — full chain verified
+      SIGNATURE_VERIFIED_WITH_AIA_CERTS               — verified after AIA fetch
+      UNSIGNED                                        — no Authenticode signature
+      SIGNATURE_PRESENT_DIGEST_OK_CHAIN_UNVERIFIABLE  — signed, digest matches, chain fails
+      SIGNATURE_DIGEST_MISMATCH                       — signed but file was tampered
+      SIGNATURE_VERIFICATION_FAILED                   — other failure
     """
-    cmd = ["osslsigncode", "verify", "-in", path]
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    import re as _re
+
+    def _run_verify(extra_args: list[str] = []) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["osslsigncode", "verify"] + extra_args + ["-in", path],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def _classify(p: subprocess.CompletedProcess) -> tuple[str, str]:
         out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
-        return {"ok": p.returncode == 0, "rc": p.returncode, "stdout": out, "stderr": ""}
+        if p.returncode == 0:
+            return "SIGNATURE_VERIFIED", out
+        if "No signature found" in out:
+            return "UNSIGNED", out
+        if "unable to get local issuer certificate" in out or "unable to get issuer certificate" in out:
+            digests = _re.findall(r"(?:Current|Calculated) message digest\s*:\s*([0-9A-Fa-f]+)", out)
+            if len(digests) >= 2 and len(set(digests)) == 1:
+                return "SIGNATURE_PRESENT_DIGEST_OK_CHAIN_UNVERIFIABLE", out
+            return "SIGNATURE_DIGEST_MISMATCH", out
+        return "SIGNATURE_VERIFICATION_FAILED", out
+
+    try:
+        p = _run_verify()
+        status, out = _classify(p)
+
+        if status == "SIGNATURE_PRESENT_DIGEST_OK_CHAIN_UNVERIFIABLE":
+            # Try to fix by fetching issuer certs via AIA
+            aia_bundle = _fetch_aia_certs(path)
+            if aia_bundle:
+                try:
+                    p2 = _run_verify(["-CAfile", aia_bundle])
+                    status2, out2 = _classify(p2)
+                    if status2 == "SIGNATURE_VERIFIED":
+                        status = "SIGNATURE_VERIFIED_WITH_AIA_CERTS"
+                        out = out2 + f"\n[AIA bundle used: {aia_bundle}]"
+                finally:
+                    try:
+                        Path(aia_bundle).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        return {
+            "ok": status in ("SIGNATURE_VERIFIED", "SIGNATURE_VERIFIED_WITH_AIA_CERTS"),
+            "status": status,
+            "rc": p.returncode,
+            "stdout": f"[osslsigncode status: {status}]\n" + out,
+            "stderr": "",
+        }
     except FileNotFoundError:
-        return {"ok": False, "rc": 127, "stdout": "", "stderr": "osslsigncode not installed"}
+        return {"ok": False, "status": "OSSLSIGNCODE_NOT_INSTALLED", "rc": 127, "stdout": "", "stderr": "osslsigncode not installed"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "rc": 124, "stdout": "", "stderr": "osslsigncode verify timed out"}
+        return {"ok": False, "status": "TIMEOUT", "rc": 124, "stdout": "", "stderr": "osslsigncode verify timed out"}
 
 # ---------------- TYPE + UNIVERSAL ----------------
 
@@ -555,20 +682,19 @@ def pe_meta_structured(path: str) -> Dict[str, Any]:
 
         file_size = Path(path).stat().st_size
 
-        # Check for embedded Authenticode signature via osslsigncode.
-        # Note: catalog-signed Windows system files will show signed=False here —
-        # that is normal and expected for legitimate MS binaries (not a red flag).
-        signed = None
-        try:
-            r = subprocess.run(["osslsigncode", "verify", "-in", path],
-                               capture_output=True, text=True, timeout=20)
-            out = (r.stdout or "") + (r.stderr or "")
-            if r.returncode == 0 and "Signature verification" in out:
-                signed = True
-            elif "No signature found" in out or "FAILED" in out or r.returncode != 0:
-                signed = False
-        except Exception:
-            signed = None
+        # Reuse authenticode_verify which handles AIA cert fetching automatically.
+        _av = authenticode_verify(path)
+        _av_status = _av.get("status", "")
+        if _av_status in ("SIGNATURE_VERIFIED", "SIGNATURE_VERIFIED_WITH_AIA_CERTS"):
+            signed = True
+        elif _av_status == "UNSIGNED":
+            signed = False
+        elif _av_status in ("SIGNATURE_PRESENT_DIGEST_OK_CHAIN_UNVERIFIABLE",):
+            signed = None  # signature present and digest intact, chain unverifiable
+        elif _av_status == "SIGNATURE_DIGEST_MISMATCH":
+            signed = False  # file tampered
+        else:
+            signed = None  # unknown / tool missing
 
         return {
             "ok": True,
