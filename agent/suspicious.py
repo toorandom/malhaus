@@ -299,6 +299,10 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         "iocs_deterministic": iocs,
         "low_level_snippets": low_level_snippets,
     }
+    if preflight.get("upx_packed"):
+        pack["upx_packed"] = True
+        upx_res = preflight.get("upx_unpack") or {}
+        pack["upx_unpack_ok"] = bool(upx_res.get("ok"))
     if preflight.get("analysis_note"):
         pack["analysis_note"] = preflight["analysis_note"]
     # Pass .NET capabilities to heuristics

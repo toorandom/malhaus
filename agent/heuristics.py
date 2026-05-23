@@ -44,9 +44,20 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
     score = 0
     reasons: List[str] = []
 
+    upx_packed = ev.get("upx_packed", False)
+    # If UPX unpack succeeded the binary was modified in-place — entropy/strings are from the
+    # unpacked binary and should be scored normally. If unpack failed, entropy reflects the
+    # compressed UPX sections and is an expected artifact, not a malware indicator.
+    upx_entropy_artifact = upx_packed and not ev.get("upx_unpack_ok", False)
+
     ent = ev.get("file_entropy")
     if isinstance(ent, (int, float)):
-        if ent >= 7.2:
+        if upx_entropy_artifact:
+            reasons.append(
+                f"File entropy ({ent}) reflects UPX compressed sections (upx_unpack failed) "
+                "— expected artifact of UPX packing, not malicious encryption."
+            )
+        elif ent >= 7.2:
             score += 18; reasons.append(f"High file entropy ({ent}) suggests packing/encryption.")
         elif ent >= 6.8:
             score += 10; reasons.append(f"Moderately high file entropy ({ent}).")

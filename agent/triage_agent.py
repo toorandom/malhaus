@@ -70,6 +70,25 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
             "dotnet_analysis": _snip_stdout(pre.get("mandatory_dotnet_analysis"), 4000),
             "binwalk": _snip_stdout(pre.get("mandatory_binwalk"), 3000),
         })
+        if pre.get("upx_packed"):
+            _upx_ok = (pre.get("upx_unpack") or {}).get("ok", False)
+            if not _upx_ok:
+                snips["upx_context"] = (
+                    "IMPORTANT ANALYST CONTEXT: This PE is UPX-packed and UPX unpacking failed. "
+                    "(1) High section entropy (UPX0/UPX1 sections) is from compression — NOT malicious packing or encryption. "
+                    "(2) VirtualAlloc, VirtualProtect, VirtualFree, GetProcAddress, LoadLibraryA are the UPX unpacker stub "
+                    "present in every UPX-packed binary — NOT indicators of process injection or shellcode. "
+                    "(3) A pe_overlay blob containing DER certificates, XML, or PNG identified by binwalk is the "
+                    "Authenticode signature + PE resources (manifest, icons) — NOT a secondary payload. "
+                    "(4) Network/share APIs (WNetOpenEnumW, NetShareEnum) and SMTP tokens in a disk-analyzer or "
+                    "file-manager tool are expected legitimate features, not C2 or exfiltration. "
+                    "Focus verdict on actual behavioral IOCs, not on packing artifacts."
+                )
+            else:
+                snips["upx_context"] = (
+                    "IMPORTANT ANALYST CONTEXT: This PE was UPX-packed and has been successfully unpacked. "
+                    "Entropy, strings, and imports reflect the unpacked binary."
+                )
         pe_meta = pre.get("mandatory_pe_meta") or {}
         if pe_meta.get("ok") and pe_meta.get("has_repro_debug"):
             vi = pe_meta.get("version_info") or {}
@@ -238,6 +257,21 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
             "No embedded Authenticode is expected (catalog-signed). "
             "Embedded HTML/XML/PNG are likely PE resources (manifests, icons)."
         )
+    elif pre.get("upx_packed"):
+        _upx_unpack_ok = (pre.get("upx_unpack") or {}).get("ok", False)
+        if not _upx_unpack_ok:
+            _strings_context_note = (
+                "This binary is UPX-packed (confirmed by upx_detect) and UPX unpacking failed. "
+                "High file entropy is expected — it comes from the UPX compressed section, not malicious encryption. "
+                "VirtualAlloc, VirtualProtect, VirtualFree, GetProcAddress, LoadLibraryA in imports are the "
+                "UPX unpacker stub — present in any UPX-packed binary, not indicators of process injection. "
+                "Score strings on actual IOC/behavioral content only, ignoring packing artifacts."
+            )
+        else:
+            _strings_context_note = (
+                "This binary was UPX-packed; it has been successfully unpacked in-place before analysis. "
+                "Strings and imports reflect the unpacked binary content."
+            )
     try:
         strings_llm = analyze_strings_llm(
             model=MODEL_STRINGS,
