@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libimage-exiftool-perl \
     osslsigncode \
     firejail \
+    upx-ucl \
   && rm -rf /var/lib/apt/lists/*
 
 # radare2 — try apt first, fall back to official .deb from GitHub
