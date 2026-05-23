@@ -424,9 +424,12 @@ def upx_unpack(path: str) -> Dict[str, Any]:
     """Decompress a UPX-packed PE in-place using `upx -d`. Returns ok=True on success."""
     if not which("upx"):
         return {"ok": False, "error": "upx not installed"}
-    # upx -d modifies the file in-place so we can't use --read-only on the sample;
-    # still jail it for network isolation and noroot
-    result = run_jailed(["upx", "-d", path], path, timeout=60, max_bytes=65000)
+    # upx -d modifies the file in-place — run_jailed passes --read-only on the sample
+    # which prevents upx from writing the unpacked data back. Use run() directly instead.
+    result = run(["upx", "-d", path], timeout=60, max_bytes=65000)
+    # run() sets ok=True when the process ran without exception, but upx can exit non-zero
+    # (e.g. already unpacked, corrupt binary). Treat rc != 0 as a failed unpack.
+    result["ok"] = result.get("rc") == 0
     result["unpacked_path"] = path
     return result
 
