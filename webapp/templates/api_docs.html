@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>REST API · malhaus</title>
+  <title>REST API &amp; MCP · malhaus</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
   <style>
@@ -85,7 +85,7 @@
 
     <section class="card">
       <div class="row" style="margin-bottom:10px;">
-        <h1 style="margin:0; font-size:22px; font-weight:800;">REST API</h1>
+        <h1 style="margin:0; font-size:22px; font-weight:800;">REST API &amp; MCP</h1>
       </div>
       <p class="note">Submit files and URLs for automated malware analysis. Results appear in the web UI alongside browser submissions. To obtain an API key, contact the administrator of this malhaus instance — keys are issued via the admin dashboard and may carry a rate limit and expiry date.</p>
     </section>
@@ -269,6 +269,113 @@ if __name__ == "__main__":
 </code></pre>
     </section>
 
+    <!-- MCP -->
+    <section class="card">
+      <h2 class="section-title">MCP (Model Context Protocol)</h2>
+      <p class="note">
+        Malhaus exposes an MCP server on port <span class="mono" style="font-size:12px;">8001</span>
+        using the <strong>Streamable HTTP</strong> transport. Any MCP client (Claude Code, Claude Desktop,
+        custom agents) can connect to it directly and call malware analysis as a tool — no shell scripts,
+        no manual API calls.
+      </p>
+      <p class="note">
+        The MCP server requires a valid malhaus API key set in the container's
+        <span class="mono" style="font-size:12px;">.env</span> file as
+        <span class="mono" style="font-size:12px;">MALHAUS_MCP_API_KEY=mh_...</span>
+      </p>
+
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Configure in Claude Code</h3>
+      <p class="note">Add to your <span class="mono" style="font-size:12px;">~/.claude/settings.json</span>:</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "malhaus": {
+      "url": "http://your-server:8001/mcp"
+    }
+  }
+}</code></pre>
+      <p class="note" style="margin-top:12px;">Or from the CLI: <span class="mono" style="font-size:12px;">claude mcp add --transport http malhaus http://your-server:8001/mcp</span></p>
+
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Available tools</h3>
+      <table class="endpoint-table">
+        <thead>
+          <tr>
+            <th>Tool</th>
+            <th>Arguments</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="path-cell">analyze_file</td>
+            <td class="desc-cell"><span class="mono" style="font-size:11px;">file_b64</span>, <span class="mono" style="font-size:11px;">filename</span></td>
+            <td class="desc-cell">Analyze a file from base64-encoded content. Returns verdict, confidence, heuristic score, top reasons, IOCs.</td>
+          </tr>
+          <tr>
+            <td class="path-cell">analyze_url</td>
+            <td class="desc-cell"><span class="mono" style="font-size:11px;">url</span></td>
+            <td class="desc-cell">Download a file from a URL and analyze it.</td>
+          </tr>
+          <tr>
+            <td class="path-cell">analyze_sha256</td>
+            <td class="desc-cell"><span class="mono" style="font-size:11px;">sha256</span></td>
+            <td class="desc-cell">Retrieve a cached result by SHA-256 hash. Instant if previously analyzed.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Usage examples (Claude Code)</h3>
+      <p class="note">Once the MCP server is configured, ask Claude naturally:</p>
+<pre><code class="language-bash"># Analyze a local file
+"Can you analyze /tmp/suspicious.exe for malware using malhaus?"
+
+# Analyze a file by URL
+"Use malhaus to check https://example.com/update.ps1"
+
+# Look up a known hash
+"Check if SHA-256 f32b2b3a050733e7c2b21ac4463169a8075aaba74a7a5defd593fe9b4a47822b has been analyzed"</code></pre>
+
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Python MCP client example</h3>
+<pre><code class="language-python">import asyncio
+import base64
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+SERVER_URL = "http://your-server:8001/mcp"
+
+async def analyze(path: str):
+    async with streamablehttp_client(SERVER_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+
+            result = await session.call_tool(
+                "analyze_file",
+                {"file_b64": b64, "filename": path.split("/")[-1]},
+            )
+            print(result.content[0].text)
+
+asyncio.run(analyze("/path/to/sample.exe"))
+</code></pre>
+
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Server environment variables</h3>
+      <ul class="field-list">
+        <li>
+          <span class="field-name">MALHAUS_MCP_API_KEY</span>
+          <span class="field-desc"><strong>Required.</strong> A valid malhaus API key (<span class="mono" style="font-size:11px;">mh_...</span>) used by the MCP server to authenticate with the REST API internally.</span>
+        </li>
+        <li>
+          <span class="field-name">MALHAUS_MCP_PORT</span>
+          <span class="field-desc">Port for the MCP server. Default: <span class="mono" style="font-size:11px;">8001</span>.</span>
+        </li>
+        <li>
+          <span class="field-name">MALHAUS_INTERNAL_URL</span>
+          <span class="field-desc">Internal URL of the malhaus REST API. Default: <span class="mono" style="font-size:11px;">http://localhost:8000</span>.</span>
+        </li>
+      </ul>
+    </section>
+
     <!-- Endpoints -->
     <section class="card">
       <h2 class="section-title">Endpoints</h2>
@@ -371,5 +478,7 @@ if __name__ == "__main__":
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
 </body>
 </html>

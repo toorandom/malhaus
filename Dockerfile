@@ -67,13 +67,8 @@ COPY . .
 
 RUN mkdir -p uploads logs extracted
 
-EXPOSE 8000
+EXPOSE 8000 8001
 
-CMD [".venv/bin/gunicorn", \
-     "--workers", "2", \
-     "--bind", "0.0.0.0:8000", \
-     "--timeout", "1800", \
-     "--capture-output", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "webapp.app:create_app()"]
+RUN chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
