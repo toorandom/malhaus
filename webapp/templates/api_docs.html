@@ -273,38 +273,14 @@ if __name__ == "__main__":
     <section class="card">
       <h2 class="section-title">MCP (Model Context Protocol)</h2>
       <p class="note">
-        Malhaus exposes an MCP server on port <span class="mono" style="font-size:12px;">8001</span>
-        using the <strong>Streamable HTTP</strong> transport. Any MCP-compatible AI assistant or agent
-        (Claude Code, Claude Desktop, custom Python agents, etc.) can connect to it and call malware
-        analysis as a native tool — no shell scripts, no manual API polling.
+        Malhaus exposes an MCP server so AI agents (Claude Code, Claude Desktop, OpenCode, Cursor,
+        custom Python agents…) can call malware analysis as a native tool — no shell scripts, no manual polling.
+        Connect any MCP client to:
       </p>
+      <div class="auth-box" style="margin-bottom:12px;">https://your-malhaus-instance.com/mcp</div>
+      <p class="note">For server setup and client configuration see <a href="https://github.com/toorandom/malhaus/blob/main/README-MCP.md" style="color:var(--muted);text-decoration:underline dotted;" target="_blank" rel="noopener">README-MCP.md</a>.</p>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Server setup</h3>
-      <p class="note">
-        The MCP server needs a malhaus API key to submit jobs internally.
-        <strong>Without this key the MCP server starts but all tool calls return an error.</strong>
-      </p>
-<pre><code class="language-bash"># 1. Log in to the malhaus admin panel and create an API key
-#    Admin → API Keys → Create key  (label it e.g. "mcp-internal")
-
-# 2. Open .env and set MALHAUS_MCP_API_KEY — it is already present as a placeholder:
-#
-#    MALHAUS_MCP_API_KEY=mh_REPLACE_WITH_YOUR_KEY_FROM_ADMIN_PANEL
-#
-#    Replace the placeholder with the real key you just generated.
-nano ~/malhaus/.env
-
-# 3. Rebuild and restart (required — the key is read at startup)
-cd ~/malhaus && docker compose up --build -d
-
-# 4. Verify the MCP server is running (any response = server is up)
-curl http://localhost:8001/mcp</code></pre>
-      <p class="note" style="margin-top:10px;">
-        The key is only used internally inside the container — the MCP server uses it to submit jobs to
-        the REST API. It is <strong>not</strong> a client-facing credential and never leaves the server.
-      </p>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Available tools</h3>
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Available tools</h3>
       <table class="endpoint-table">
         <thead>
           <tr><th>Tool</th><th>Arguments</th><th>Description</th></tr>
@@ -328,356 +304,83 @@ curl http://localhost:8001/mcp</code></pre>
         </tbody>
       </table>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Port layout</h3>
-      <div style="background:var(--panel2);border:1px solid rgba(255,255,255,.10);border-radius:8px;padding:14px 16px;margin-bottom:12px;font-size:12px;line-height:1.9;">
-        <strong>Port 80 / 443</strong> — nginx → web UI + REST API + <strong>/mcp</strong> (<span class="mono">https://your-domain.com/mcp</span>)<br>
-        <strong>Port 8000</strong> — gunicorn (internal only, not exposed outside Docker)<br>
-        <strong>Port 8001</strong> — MCP process (internal only — nginx proxies <span class="mono">/mcp</span> here)
-      </div>
-      <p class="note">
-        The MCP server runs as a second process inside the container on port 8001.
-        nginx proxies <span class="mono" style="font-size:12px;">/mcp</span> to it, so MCP clients connect via
-        <span class="mono" style="font-size:12px;">https://your-domain.com/mcp</span> — the same hostname and port as the web UI,
-        with TLS. Port 8001 is never exposed externally. Nothing needs to be installed on the client machine.
-      </p>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client: Claude Code (CLI)</h3>
-<pre><code class="language-bash"># One-time registration — nothing to install locally, just a URL
-claude mcp add --transport http malhaus https://your-domain.com/mcp
-
-# Verify it is registered
-claude mcp list</code></pre>
-      <p class="note" style="margin-top:10px;">Or add permanently to <span class="mono" style="font-size:12px;">~/.claude/settings.json</span> (global) or <span class="mono" style="font-size:12px;">.claude/settings.json</span> (project):</p>
-<pre><code class="language-json">{
-  "mcpServers": {
-    "malhaus": {
-      "url": "https://your-domain.com/mcp"
-    }
-  }
-}</code></pre>
-      <p class="note" style="margin-top:10px;">Example prompts in a Claude Code session:</p>
-<pre><code class="language-bash"># Analyze a local Linux file
-# Claude reads /home/analyst/samples/suspicious.exe, encodes it, calls analyze_file
-> Analyze /home/analyst/samples/suspicious.exe for malware using malhaus
-
-# Analyze a local Windows file
-# Claude reads C:\Users\analyst\Downloads\invoice.exe, encodes it, calls analyze_file
-> Check if C:\Users\analyst\Downloads\invoice.exe is safe to open
-
-# Analyze a remote URL — server downloads it directly
-> Use malhaus to check https://cdn.example.com/updater.ps1
-
-# Check if a hash was already analyzed (instant cache lookup)
-> Has malhaus analyzed SHA-256 4d4a8de9f4c07e6b8b23c2a1e0f6d3a9b5e2c8d1f7a05031...?
-
-# Batch analysis — Claude calls analyze_file once per file
-> Analyze all .exe files in /home/analyst/samples/ and give me a risk table</code></pre>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client: Claude Desktop</h3>
-      <p class="note">Config file: macOS → <span class="mono" style="font-size:12px;">~/Library/Application Support/Claude/claude_desktop_config.json</span>, Windows → <span class="mono" style="font-size:12px;">%APPDATA%\Claude\claude_desktop_config.json</span>. Restart Claude Desktop after saving.</p>
-<pre><code class="language-json">{
-  "mcpServers": {
-    "malhaus": {
-      "url": "https://your-domain.com/mcp"
-    }
-  }
-}</code></pre>
-      <p class="note" style="margin-top:8px;">Example prompts after connecting:</p>
-<pre><code class="language-bash">"Analyze /tmp/suspicious.exe and tell me if it is malware"
-"Check https://example.com/payload.bin using malhaus and summarize the findings"
-"Is the file at C:\malware\dropper.exe safe? Use malhaus to analyze it"</code></pre>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client: OpenCode (terminal agent)</h3>
-      <p class="note">Config file: <span class="mono" style="font-size:12px;">~/.config/opencode/config.json</span> (Linux/macOS) or <span class="mono" style="font-size:12px;">%APPDATA%\opencode\config.json</span> (Windows). Restart OpenCode after saving.</p>
-<pre><code class="language-json">{
-  "mcp": {
-    "servers": {
-      "malhaus": {
-        "type": "remote",
-        "url": "https://your-domain.com/mcp"
-      }
-    }
-  }
-}</code></pre>
-      <p class="note" style="margin-top:8px;">Example prompts:</p>
-<pre><code class="language-bash">"Analyze /home/analyst/samples/suspicious.elf before I run it"
-"Use malhaus to check https://cdn.example.com/payload.sh"</code></pre>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">How local file analysis works</h3>
-      <p class="note">
-        The MCP server runs inside Docker on your server — it has no access to files on your machine.
-        When you ask the AI to analyze a local file (e.g. <span class="mono" style="font-size:12px;">C:\Users\analyst\Downloads\invoice.exe</span>
-        or <span class="mono" style="font-size:12px;">/home/analyst/samples/dropper.elf</span>),
-        the <strong>client</strong> (the AI agent) reads the file, encodes it as base64, and passes
-        the bytes to <span class="mono" style="font-size:12px;">analyze_file</span>.
-        The server receives bytes, not a path — it never touches your filesystem.
-      </p>
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">How it works</h3>
       <div style="background:var(--panel2);border:1px solid rgba(255,255,255,.10);border-radius:8px;padding:14px 16px;margin-bottom:16px;font-size:12px;line-height:1.9;">
-        <strong>Local file — Linux:</strong> <span class="mono">/home/analyst/samples/dropper.exe</span><br>
-        <strong>Local file — Windows:</strong> <span class="mono">C:\Users\analyst\Downloads\invoice.exe</span><br>
-        &nbsp;&nbsp;→ agent reads file bytes from that path on the client machine<br>
-        &nbsp;&nbsp;→ agent base64-encodes the bytes<br>
-        &nbsp;&nbsp;→ agent calls <span class="mono">analyze_file(file_b64="TVqQAAMA...", filename="dropper.exe")</span><br>
-        &nbsp;&nbsp;→ server decodes → runs full analysis → returns verdict<br><br>
-        <strong>Remote URL:</strong> <span class="mono">https://cdn.example.com/updater.ps1</span><br>
-        &nbsp;&nbsp;→ agent calls <span class="mono">analyze_url(url="https://cdn.example.com/updater.ps1")</span><br>
-        &nbsp;&nbsp;→ server downloads the file from that URL → runs analysis → returns verdict<br><br>
-        <strong>Cached by hash:</strong> <span class="mono">4d4a8de9f4c07e6b8b23...</span><br>
-        &nbsp;&nbsp;→ agent calls <span class="mono">analyze_sha256(sha256="4d4a8de9f4...")</span><br>
-        &nbsp;&nbsp;→ returns instantly if previously analyzed, otherwise asks you to submit the file
+        <strong>Local file</strong> (e.g. <span class="mono">/home/analyst/samples/dropper.exe</span> or <span class="mono">C:\Users\analyst\Downloads\invoice.exe</span>)<br>
+        &nbsp;&nbsp;→ your code reads the file and base64-encodes it<br>
+        &nbsp;&nbsp;→ calls <span class="mono">analyze_file(file_b64="TVqQAAMA...", filename="dropper.exe")</span><br>
+        &nbsp;&nbsp;→ server decodes, runs analysis, returns verdict<br><br>
+        <strong>Remote URL</strong> (e.g. <span class="mono">https://cdn.example.com/payload.ps1</span>)<br>
+        &nbsp;&nbsp;→ calls <span class="mono">analyze_url(url="https://cdn.example.com/payload.ps1")</span><br>
+        &nbsp;&nbsp;→ server downloads and analyzes it directly
       </div>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client: Python (direct MCP SDK)</h3>
-      <p class="note">
-        Install: <span class="mono" style="font-size:12px;">pip install mcp</span> — works on Linux, macOS, and Windows.<br>
-        The script reads files on the <strong>client machine</strong> before sending — the server never touches your filesystem.
-      </p>
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Example: analyze a URL</h3>
+      <p class="note">Install: <span class="mono" style="font-size:12px;">pip install mcp httpx</span></p>
 <pre><code class="language-python">#!/usr/bin/env python3
 """
-malhaus-mcp-client — analyze files and URLs via the malhaus MCP server.
+Analyze a file by URL using the malhaus MCP server.
+Usage: python analyze_url.py https://cdn.example.com/suspicious.exe
 
-Usage examples:
-  # Analyze a local file (Linux / macOS)
-  python malhaus_mcp.py file /home/analyst/samples/dropper.exe
-  python malhaus_mcp.py file /mnt/evidence/case-2024/payload.ps1
-
-  # Analyze a local file (Windows — use quotes if path has spaces)
-  python malhaus_mcp.py file "C:\\Users\\analyst\\Downloads\\invoice.exe"
-  python malhaus_mcp.py file "D:\\malware-samples\\ransomware_sample.bin"
-
-  # Analyze a remote URL (server downloads it)
-  python malhaus_mcp.py url https://cdn.example.com/updater.ps1
-  python malhaus_mcp.py url http://192.168.1.100/share/suspicious.exe
-
-  # Check if a SHA-256 was already analyzed (instant cache lookup)
-  python malhaus_mcp.py sha256 4d4a8de9f4c07e6b8b23c2a1e0f6d3a9b5e2c8d1f7a05031e6b8b2a9c4f70d1e
-
-pip install mcp
+pip install mcp httpx
 """
-import asyncio
-import base64
-import os
-import sys
+import asyncio, sys, httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-# Set MALHAUS_MCP_URL or edit the default below
-SERVER_URL = os.environ.get("MALHAUS_MCP_URL", "https://your-domain.com/mcp")
+SERVER_URL = "https://your-malhaus-instance.com/mcp"
 
+# Note: pass httpx_client_factory=lambda **kw: httpx.AsyncClient(verify=False, **kw)
+# if your server uses a self-signed certificate.
 
-async def _call(tool: str, args: dict) -> str:
-    async with streamablehttp_client(SERVER_URL) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(tool, args)
-            return result.content[0].text
-
-
-async def analyze_local_file(path: str) -> str:
-    """
-    Read a file from THIS machine, base64-encode it, and submit for analysis.
-    The file is read here (client side) — the server never accesses your filesystem.
-
-    Linux:   path = "/home/analyst/samples/dropper.exe"
-    Windows: path = "C:\\Users\\analyst\\Downloads\\invoice.exe"
-    """
-    with open(path, "rb") as fh:
-        file_b64 = base64.b64encode(fh.read()).decode()
-    filename = os.path.basename(path)
-    print(f"[*] Submitting local file: {path}  ({filename})", flush=True)
-    return await _call("analyze_file", {"file_b64": file_b64, "filename": filename})
-
-
-async def analyze_remote_url(url: str) -> str:
-    """
-    Tell malhaus to download the file at the given URL and analyze it.
-    The server fetches the file — the client does not.
-
-    Example: url = "https://cdn.example.com/updater.ps1"
-    """
-    print(f"[*] Submitting URL: {url}", flush=True)
-    return await _call("analyze_url", {"url": url})
-
-
-async def check_cached_sha256(sha256: str) -> str:
-    """
-    Retrieve a cached result by SHA-256. Returns instantly if analyzed before.
-
-    Example: sha256 = "4d4a8de9f4c07e6b8b23c2a1e0f6d3a9b5e2c8d1f7a0..."
-    """
-    print(f"[*] Checking cache for SHA-256: {sha256}", flush=True)
-    return await _call("analyze_sha256", {"sha256": sha256})
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage:")
-        print("  malhaus_mcp.py file   /path/to/local/file.exe")
-        print('  malhaus_mcp.py file   "C:\\\\Users\\\\analyst\\\\Downloads\\\\invoice.exe"')
-        print("  malhaus_mcp.py url    https://example.com/remote-file.ps1")
-        print("  malhaus_mcp.py sha256 4d4a8de9f4c07e6b...")
-        sys.exit(1)
-
-    mode, value = sys.argv[1], sys.argv[2]
-    if mode == "file":
-        print(asyncio.run(analyze_local_file(value)))
-    elif mode == "url":
-        print(asyncio.run(analyze_remote_url(value)))
-    elif mode == "sha256":
-        print(asyncio.run(check_cached_sha256(value)))
-    else:
-        print(f"Unknown mode '{mode}'. Use: file, url, or sha256")
-        sys.exit(1)
-</code></pre>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client: Databricks (Mosaic AI / notebook)</h3>
-      <p class="note">
-        Analyze files stored in DBFS, Unity Catalog Volumes, or cloud storage from a Databricks notebook or AI Agent.
-        Install in your cluster: <span class="mono" style="font-size:12px;">%pip install mcp</span>
-      </p>
-<pre><code class="language-python">import asyncio, base64, os
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
-
-MALHAUS_MCP_URL = "https://your-domain.com/mcp"   # reachable from Databricks cluster
-
-
-async def analyze_dbfs_file(dbfs_path: str) -> str:
-    """
-    Analyze a file stored in DBFS or a Unity Catalog Volume.
-
-    Examples:
-      dbfs_path = "/dbfs/FileStore/malware-samples/dropper.exe"
-      dbfs_path = "/Volumes/main/security/incoming/suspicious.ps1"
-      dbfs_path = "/Volumes/main/security/incoming/ransomware_sample.bin"
-    """
-    with open(dbfs_path, "rb") as fh:
-        file_b64 = base64.b64encode(fh.read()).decode()
-    filename = os.path.basename(dbfs_path)
-    async with streamablehttp_client(MALHAUS_MCP_URL) as (r, w, _):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            result = await s.call_tool(
-                "analyze_file", {"file_b64": file_b64, "filename": filename}
-            )
-            return result.content[0].text
-
-
-async def analyze_cloud_url(url: str) -> str:
-    """
-    Analyze a file via a presigned cloud storage URL (S3, Azure Blob, GCS).
-    The malhaus server downloads the file directly.
-
-    Examples:
-      url = "https://myaccount.blob.core.windows.net/samples/payload.exe?sv=2023-01-03&..."
-      url = "https://s3.amazonaws.com/my-bucket/samples/dropper.exe?X-Amz-Signature=..."
-    """
-    async with streamablehttp_client(MALHAUS_MCP_URL) as (r, w, _):
+async def main(url: str):
+    async with streamablehttp_client(SERVER_URL) as (r, w, _):
         async with ClientSession(r, w) as s:
             await s.initialize()
             result = await s.call_tool("analyze_url", {"url": url})
-            return result.content[0].text
+            print(result.content[0].text)
 
-
-# In a Databricks notebook cell:
-
-# Analyze a Unity Catalog Volume file:
-result = asyncio.run(analyze_dbfs_file(
-    "/Volumes/main/security/incoming/suspicious_dropper.exe"
-))
-print(result)
-
-# Analyze via presigned Azure Blob URL:
-result = asyncio.run(analyze_cloud_url(
-    "https://myaccount.blob.core.windows.net/samples/invoice.doc?sv=2023-01-03&..."
-))
-print(result)
+asyncio.run(main(sys.argv[1]))
 </code></pre>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">File size limits</h3>
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Example: analyze a local file</h3>
       <p class="note">
-        The REST API enforces <span class="mono" style="font-size:12px;">MALHAUS_MAX_UPLOAD_MB</span> (default: 10 MB).
-        The <span class="mono" style="font-size:12px;">analyze_file</span> MCP tool sends base64-encoded content, which expands the size by ~33%.
-        A 10 MB file becomes ~13.3 MB of base64 text — this is fine for most malware samples (PE, Office docs, scripts).
-        If your file is larger than the limit, use <span class="mono" style="font-size:12px;">analyze_url</span> instead:
-        upload the file to any reachable HTTP endpoint (S3, Azure Blob with SAS, Nginx directory listing, etc.)
-        and pass the URL. The server downloads it directly with no base64 overhead.
+        The file is read on your machine, base64-encoded, and sent to the server.
+        The server never accesses your filesystem directly.
       </p>
-      <div style="background:var(--panel2);border:1px solid rgba(255,255,255,.10);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;line-height:1.8;">
-        <strong>File &le; 10 MB</strong> → use <span class="mono">analyze_file(file_b64=..., filename="sample.exe")</span><br>
-        <strong>File &gt; 10 MB</strong> → upload to S3/Azure Blob/any URL, then use <span class="mono">analyze_url(url="https://...")</span>
-      </div>
+<pre><code class="language-python">#!/usr/bin/env python3
+"""
+Analyze a local file using the malhaus MCP server.
+Usage: python analyze_file.py /path/to/suspicious.exe
+       python analyze_file.py "C:\\Users\\analyst\\Downloads\\invoice.exe"
 
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Testing the MCP server</h3>
-      <p class="note">Run these commands on the server to verify the MCP server is up and tools are working:</p>
-<pre><code class="language-bash"># 1. Quick reachability check — any JSON response means the server is up
-curl http://localhost:8001/mcp
-# Expected: {"jsonrpc":"2.0","error":{"message":"Not Acceptable..."}}
-# The "Not Acceptable" error is normal — curl does not send the required Accept header.
-
-# 2. Run a full end-to-end test from inside the container
-docker compose exec malhaus python - &lt;&lt;'EOF'
-import asyncio, base64
+pip install mcp httpx
+"""
+import asyncio, base64, os, sys, httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-async def test():
-    async with streamablehttp_client("http://localhost:8001/mcp") as (r, w, _):
+SERVER_URL = "https://your-malhaus-instance.com/mcp"
+
+# Note: pass httpx_client_factory=lambda **kw: httpx.AsyncClient(verify=False, **kw)
+# if your server uses a self-signed certificate.
+
+async def main(path: str):
+    with open(path, "rb") as fh:
+        file_b64 = base64.b64encode(fh.read()).decode()
+    filename = os.path.basename(path)
+    print(f"Submitting: {filename} ({os.path.getsize(path):,} bytes)", flush=True)
+    async with streamablehttp_client(SERVER_URL) as (r, w, _):
         async with ClientSession(r, w) as s:
             await s.initialize()
-            tools = await s.list_tools()
-            print("Tools:", [t.name for t in tools.tools])
+            result = await s.call_tool(
+                "analyze_file",
+                {"file_b64": file_b64, "filename": filename},
+            )
+            print(result.content[0].text)
 
-            # Test analyze_url with a known-good URL
-            res = await s.call_tool("analyze_url", {
-                "url": "https://secure.eicar.org/eicar.com"
-            })
-            print(res.content[0].text)
-
-asyncio.run(test())
-EOF
-
-# 3. Test analyze_file with a local file (reads and encodes client-side)
-docker compose exec malhaus python - &lt;&lt;'EOF'
-import asyncio, base64
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
-
-async def test():
-    async with streamablehttp_client("http://localhost:8001/mcp") as (r, w, _):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            # Read any local file and encode it
-            with open("/bin/ls", "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            res = await s.call_tool("analyze_file", {
-                "file_b64": b64,
-                "filename": "ls"
-            })
-            print(res.content[0].text)
-
-asyncio.run(test())
-EOF</code></pre>
-
-      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Server environment variables</h3>
-      <ul class="field-list">
-        <li>
-          <span class="field-name">MALHAUS_MCP_API_KEY</span>
-          <span class="field-desc"><strong>Required.</strong> A malhaus API key (<span class="mono" style="font-size:11px;">mh_...</span>) created in the admin panel. Used internally by the MCP server to authenticate with the REST API. Not exposed to MCP clients.</span>
-        </li>
-        <li>
-          <span class="field-name">MALHAUS_MCP_PORT</span>
-          <span class="field-desc">MCP server listen port. Default: <span class="mono" style="font-size:11px;">8001</span>. Change only if 8001 conflicts with something else on the host.</span>
-        </li>
-        <li>
-          <span class="field-name">MALHAUS_INTERNAL_URL</span>
-          <span class="field-desc">Internal REST API base URL. Default: <span class="mono" style="font-size:11px;">http://localhost:8000</span>. Only change if the REST API runs on a different host/port.</span>
-        </li>
-        <li>
-          <span class="field-name">MALHAUS_PUBLIC_URL</span>
-          <span class="field-desc">Override the public base URL used in report links returned by MCP tools (e.g. <span class="mono" style="font-size:11px;">https://malhaus.example.com</span>). If not set, the URL is automatically derived from the incoming request's <span class="mono" style="font-size:11px;">Host</span> header — usually no configuration needed.</span>
-        </li>
-      </ul>
+asyncio.run(main(sys.argv[1]))
+</code></pre>
     </section>
 
     <!-- Endpoints -->
