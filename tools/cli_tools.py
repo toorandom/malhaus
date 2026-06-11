@@ -108,6 +108,9 @@ def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
     # MZ magic → PE regardless of file(1) output
     if magic[:2] == b"MZ":
         return "pe"
+    # DOS COM executables have no MZ header; treat as PE for analysis purposes
+    if ext == ".com":
+        return "pe"
     if "elf" in s or magic[:4] == b"\x7fELF":
         return "elf"
     if "microsoft word" in s or "microsoft excel" in s or "microsoft powerpoint" in s or "ole 2" in s or "compound document" in s:
