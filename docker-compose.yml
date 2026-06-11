@@ -13,7 +13,6 @@ services:
       - /opt/ghidra:/opt/ghidra:ro
     expose:
       - "8000"
-      - "8001"
     # firejail needs these capabilities inside the container
     cap_add:
       - SYS_PTRACE
