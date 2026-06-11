@@ -321,8 +321,17 @@ curl http://localhost:8001/mcp</code></pre>
         </tbody>
       </table>
 
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">How clients connect</h3>
+      <p class="note">
+        Malhaus uses the <strong>Streamable HTTP</strong> MCP transport. Clients connect over the
+        network using just a URL — <strong>nothing needs to be installed locally on the client
+        machine</strong>. This is different from stdio-based MCP servers where you would specify
+        a local path to an executable. Here the only thing you need is:
+        <span class="mono" style="font-size:12px;">http://your-server:8001/mcp</span>
+      </p>
+
       <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client setup — Claude Code</h3>
-<pre><code class="language-bash"># Register the malhaus MCP server once
+<pre><code class="language-bash"># Register the malhaus MCP server once — just a URL, nothing to install locally
 claude mcp add --transport http malhaus http://your-server:8001/mcp
 
 # Then just ask Claude naturally:
