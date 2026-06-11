@@ -5,19 +5,17 @@ Malhaus MCP server — exposes malware triage as MCP tools.
 Runs on port 8001 (Streamable HTTP transport), wraps the malhaus REST API
 running at localhost:8000 inside the same container.
 
-Configure in Claude Code (~/.claude/settings.json or via /mcp):
-  {
-    "mcpServers": {
-      "malhaus": {
-        "url": "http://your-server:8001/mcp"
-      }
-    }
-  }
+Required env var (set in .env):
+  MALHAUS_MCP_API_KEY  — a valid malhaus API key (mh_...) created in the
+                         admin panel. The MCP server uses it to authenticate
+                         with the REST API internally.
 
-Required env vars (same .env as malhaus):
-  MALHAUS_MCP_API_KEY  — a valid malhaus API key (mh_...)
+Optional env vars:
   MALHAUS_MCP_PORT     — port to listen on (default 8001)
-  MALHAUS_INTERNAL_URL — internal REST API base (default http://localhost:8000)
+  MALHAUS_INTERNAL_URL — internal REST base URL (default http://localhost:8000)
+
+Connect from any MCP client:
+  URL: http://your-server:8001/mcp   (Streamable HTTP transport)
 """
 
 import os
@@ -31,8 +29,9 @@ MALHAUS_API_KEY  = os.environ.get("MALHAUS_MCP_API_KEY", "")
 
 _POLL_INTERVAL = 5    # seconds between status polls
 _POLL_TIMEOUT  = 360  # max seconds to wait for a result
+_MCP_PORT      = int(os.environ.get("MALHAUS_MCP_PORT", "8001"))
 
-
+# host and port belong on the constructor, not on run()
 mcp = FastMCP(
     "malhaus",
     instructions=(
@@ -40,10 +39,12 @@ mcp = FastMCP(
         "Use analyze_file to scan a file (pass base64-encoded content + filename), "
         "analyze_url to scan a file downloaded from a URL, "
         "or analyze_sha256 to retrieve a cached result by hash. "
-        "Analysis typically takes 30–120 seconds. "
+        "Analysis typically takes 30-120 seconds. "
         "Results include verdict (benign/suspicious/likely_malware), confidence, "
         "heuristic score, top reasons, and extracted IOCs."
     ),
+    host="0.0.0.0",
+    port=_MCP_PORT,
 )
 
 
@@ -72,7 +73,7 @@ def _poll_job(job_id: str) -> dict:
 
 
 def _fmt(data: dict) -> str:
-    """Format a completed job result as readable text for the LLM."""
+    """Format a completed job result as readable text."""
     v       = data.get("verdict") or {}
     risk    = v.get("risk_level", "unknown").upper()
     conf    = v.get("confidence", 0)
@@ -108,7 +109,11 @@ def _fmt(data: dict) -> str:
 
 def _submit_and_wait(payload: dict) -> str:
     if not MALHAUS_API_KEY:
-        return "Error: MALHAUS_MCP_API_KEY is not set. Configure it in the container .env file."
+        return (
+            "Error: MALHAUS_MCP_API_KEY is not set. "
+            "Create an API key in the malhaus admin panel, then add "
+            "MALHAUS_MCP_API_KEY=mh_... to your .env file and restart the container."
+        )
     r = requests.post(
         f"{MALHAUS_INTERNAL}/api/v1/analyze",
         json=payload,
@@ -136,8 +141,8 @@ def analyze_file(file_b64: str, filename: str = "sample.bin") -> str:
         filename: Original filename (helps with type detection, e.g. "invoice.doc").
 
     Returns a verdict (benign/suspicious/likely_malware), confidence score,
-    heuristic score, the top reasons, and any extracted IOCs (URLs, IPs, domains, etc.).
-    Analysis typically takes 30–120 seconds.
+    heuristic score, the top reasons, and any extracted IOCs.
+    Analysis typically takes 30-120 seconds.
     """
     return _submit_and_wait({"file_b64": file_b64, "filename": filename})
 
@@ -152,7 +157,7 @@ def analyze_url(url: str) -> str:
 
     Returns a verdict (benign/suspicious/likely_malware), confidence score,
     heuristic score, the top reasons, and any extracted IOCs.
-    Analysis typically takes 30–120 seconds.
+    Analysis typically takes 30-120 seconds.
     """
     return _submit_and_wait({"url": url})
 
@@ -190,5 +195,6 @@ def analyze_sha256(sha256: str) -> str:
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("MALHAUS_MCP_PORT", "8001"))
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=port, path="/mcp")
+    # host and port are set in the FastMCP constructor above.
+    # streamable_http_path defaults to /mcp — endpoint is http://host:port/mcp
+    mcp.run(transport="streamable-http")

@@ -274,41 +274,39 @@ if __name__ == "__main__":
       <h2 class="section-title">MCP (Model Context Protocol)</h2>
       <p class="note">
         Malhaus exposes an MCP server on port <span class="mono" style="font-size:12px;">8001</span>
-        using the <strong>Streamable HTTP</strong> transport. Any MCP client (Claude Code, Claude Desktop,
-        custom agents) can connect to it directly and call malware analysis as a tool — no shell scripts,
-        no manual API calls.
-      </p>
-      <p class="note">
-        The MCP server requires a valid malhaus API key set in the container's
-        <span class="mono" style="font-size:12px;">.env</span> file as
-        <span class="mono" style="font-size:12px;">MALHAUS_MCP_API_KEY=mh_...</span>
+        using the <strong>Streamable HTTP</strong> transport. Any MCP-compatible AI assistant or agent
+        (Claude Code, Claude Desktop, custom Python agents, etc.) can connect to it and call malware
+        analysis as a native tool — no shell scripts, no manual API polling.
       </p>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Configure in Claude Code</h3>
-      <p class="note">Add to your <span class="mono" style="font-size:12px;">~/.claude/settings.json</span>:</p>
-<pre><code class="language-json">{
-  "mcpServers": {
-    "malhaus": {
-      "url": "http://your-server:8001/mcp"
-    }
-  }
-}</code></pre>
-      <p class="note" style="margin-top:12px;">Or from the CLI: <span class="mono" style="font-size:12px;">claude mcp add --transport http malhaus http://your-server:8001/mcp</span></p>
+      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Server setup</h3>
+      <p class="note">One-time configuration on the server:</p>
+<pre><code class="language-bash"># 1. Log in to the malhaus admin panel and create an API key
+#    Admin → API Keys → Create key  (label it e.g. "mcp-internal")
 
-      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Available tools</h3>
+# 2. Add it to your .env file on the server
+echo "MALHAUS_MCP_API_KEY=mh_your_key_here" >> ~/malhaus/.env
+
+# 3. Restart the container (no rebuild needed)
+cd ~/malhaus && docker compose up -d
+
+# 4. Verify the MCP server is running
+curl http://localhost:8001/mcp</code></pre>
+      <p class="note" style="margin-top:10px;">
+        The key is only used internally inside the container — the MCP server uses it to submit jobs to
+        the REST API. It is <strong>not</strong> a client-facing credential and never leaves the server.
+      </p>
+
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Available tools</h3>
       <table class="endpoint-table">
         <thead>
-          <tr>
-            <th>Tool</th>
-            <th>Arguments</th>
-            <th>Description</th>
-          </tr>
+          <tr><th>Tool</th><th>Arguments</th><th>Description</th></tr>
         </thead>
         <tbody>
           <tr>
             <td class="path-cell">analyze_file</td>
             <td class="desc-cell"><span class="mono" style="font-size:11px;">file_b64</span>, <span class="mono" style="font-size:11px;">filename</span></td>
-            <td class="desc-cell">Analyze a file from base64-encoded content. Returns verdict, confidence, heuristic score, top reasons, IOCs.</td>
+            <td class="desc-cell">Analyze a file from base64-encoded content. Returns verdict, confidence, heuristic score, top reasons, IOCs. Typical duration: 30–120 s.</td>
           </tr>
           <tr>
             <td class="path-cell">analyze_url</td>
@@ -323,55 +321,104 @@ if __name__ == "__main__":
         </tbody>
       </table>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Usage examples (Claude Code)</h3>
-      <p class="note">Once the MCP server is configured, ask Claude naturally:</p>
-<pre><code class="language-bash"># Analyze a local file
-"Can you analyze /tmp/suspicious.exe for malware using malhaus?"
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client setup — Claude Code</h3>
+<pre><code class="language-bash"># Register the malhaus MCP server once
+claude mcp add --transport http malhaus http://your-server:8001/mcp
 
-# Analyze a file by URL
-"Use malhaus to check https://example.com/update.ps1"
+# Then just ask Claude naturally:
+# "Analyze /tmp/suspicious.exe for malware using malhaus"
+# "Use malhaus to check https://example.com/payload.ps1"
+# "Has SHA-256 f32b2b3a... been analyzed in malhaus?"</code></pre>
+      <p class="note" style="margin-top:10px;">Or add it permanently to <span class="mono" style="font-size:12px;">~/.claude/settings.json</span>:</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "malhaus": {
+      "url": "http://your-server:8001/mcp"
+    }
+  }
+}</code></pre>
 
-# Look up a known hash
-"Check if SHA-256 f32b2b3a050733e7c2b21ac4463169a8075aaba74a7a5defd593fe9b4a47822b has been analyzed"</code></pre>
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client setup — Claude Desktop</h3>
+      <p class="note">Add to <span class="mono" style="font-size:12px;">claude_desktop_config.json</span> (macOS: <span class="mono" style="font-size:12px;">~/Library/Application Support/Claude/</span>, Windows: <span class="mono" style="font-size:12px;">%APPDATA%\Claude\</span>):</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "malhaus": {
+      "url": "http://your-server:8001/mcp"
+    }
+  }
+}</code></pre>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Python MCP client example</h3>
-<pre><code class="language-python">import asyncio
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client setup — Python agent</h3>
+      <p class="note">Use the <span class="mono" style="font-size:12px;">mcp</span> Python library to call malhaus from any custom agent or script:</p>
+<pre><code class="language-python">#!/usr/bin/env python3
+"""
+malhaus-mcp-client — call malhaus analysis from Python via MCP.
+pip install mcp requests
+"""
+import asyncio
 import base64
+import sys
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 SERVER_URL = "http://your-server:8001/mcp"
 
-async def analyze(path: str):
+
+async def analyze_file(path: str) -> str:
     async with streamablehttp_client(SERVER_URL) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
-
             with open(path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
-
             result = await session.call_tool(
                 "analyze_file",
                 {"file_b64": b64, "filename": path.split("/")[-1]},
             )
-            print(result.content[0].text)
+            return result.content[0].text
 
-asyncio.run(analyze("/path/to/sample.exe"))
+
+async def analyze_url(url: str) -> str:
+    async with streamablehttp_client(SERVER_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("analyze_url", {"url": url})
+            return result.content[0].text
+
+
+async def analyze_sha256(sha256: str) -> str:
+    async with streamablehttp_client(SERVER_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("analyze_sha256", {"sha256": sha256})
+            return result.content[0].text
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python client.py <file|url|sha256> [value]")
+        sys.exit(1)
+    mode, value = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else ""
+    if mode == "file":
+        print(asyncio.run(analyze_file(value)))
+    elif mode == "url":
+        print(asyncio.run(analyze_url(value)))
+    elif mode == "sha256":
+        print(asyncio.run(analyze_sha256(value)))
 </code></pre>
 
-      <h3 class="section-title" style="font-size:14px; margin-top:18px;">Server environment variables</h3>
+      <h3 class="section-title" style="font-size:14px; margin-top:22px;">Server environment variables</h3>
       <ul class="field-list">
         <li>
           <span class="field-name">MALHAUS_MCP_API_KEY</span>
-          <span class="field-desc"><strong>Required.</strong> A valid malhaus API key (<span class="mono" style="font-size:11px;">mh_...</span>) used by the MCP server to authenticate with the REST API internally.</span>
+          <span class="field-desc"><strong>Required.</strong> A malhaus API key (<span class="mono" style="font-size:11px;">mh_...</span>) created in the admin panel. Used internally by the MCP server to authenticate with the REST API. Not exposed to clients.</span>
         </li>
         <li>
           <span class="field-name">MALHAUS_MCP_PORT</span>
-          <span class="field-desc">Port for the MCP server. Default: <span class="mono" style="font-size:11px;">8001</span>.</span>
+          <span class="field-desc">MCP server listen port. Default: <span class="mono" style="font-size:11px;">8001</span>.</span>
         </li>
         <li>
           <span class="field-name">MALHAUS_INTERNAL_URL</span>
-          <span class="field-desc">Internal URL of the malhaus REST API. Default: <span class="mono" style="font-size:11px;">http://localhost:8000</span>.</span>
+          <span class="field-desc">Internal REST API base URL. Default: <span class="mono" style="font-size:11px;">http://localhost:8000</span>. Only change if running the REST API on a different host/port.</span>
         </li>
       </ul>
     </section>
