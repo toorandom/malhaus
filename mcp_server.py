@@ -80,8 +80,8 @@ def _fmt(data: dict) -> str:
     ftype   = v.get("file_type", "unknown")
     sha     = data.get("sha256", "")
     heur    = data.get("heuristic_score", "?")
-    reasons = v.get("top_reasons") or []
-    iocs    = v.get("iocs") or {}
+    reasons = data.get("top_reasons") or v.get("top_reasons") or []
+    iocs    = v.get("iocs") or data.get("iocs") or {}
     cached  = data.get("cached", False)
 
     lines = [
@@ -101,8 +101,10 @@ def _fmt(data: dict) -> str:
             lines.append(f"\nIOCs ({key}): {', '.join(vals)}")
 
     report_url = data.get("report_url")
+    public_url = os.environ.get("MALHAUS_PUBLIC_URL", "").rstrip("/")
     if report_url:
-        lines.append(f"\nFull report: {MALHAUS_INTERNAL}{report_url}")
+        base = public_url if public_url else MALHAUS_INTERNAL.rstrip("/")
+        lines.append(f"\nFull report: {base}{report_url}")
 
     return "\n".join(lines)
 
