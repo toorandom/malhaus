@@ -122,8 +122,16 @@ If you already know the SHA-256 of a file that was analyzed before, you can skip
 
 ## Client configuration
 
-Replace `your-server` with the hostname or IP of your malhaus instance (e.g. `malhaus.example.com`
-or `192.168.1.50`). Port 8001 must be reachable from the client.
+**MCP endpoint URL:**
+
+| Setup | URL | Notes |
+|-------|-----|-------|
+| Docker + nginx (recommended) | `https://your-domain.com/mcp` | TLS, port 443, no extra ports needed |
+| Direct / dev / no nginx | `http://your-server:8001/mcp` | Plain HTTP, port 8001 must be open |
+
+With a standard Docker deployment nginx is already running and proxying `/mcp` to the internal port
+8001. Clients connect to `https://your-domain.com/mcp` — same hostname and port as the web UI,
+no firewall changes needed.
 
 ---
 
@@ -132,6 +140,10 @@ or `192.168.1.50`). Port 8001 must be reachable from the client.
 **One-time setup:**
 
 ```bash
+# With nginx (recommended — same domain as the web UI, TLS)
+claude mcp add --transport http malhaus https://your-domain.com/mcp
+
+# Without nginx (direct, plain HTTP)
 claude mcp add --transport http malhaus http://your-server:8001/mcp
 ```
 
@@ -141,7 +153,7 @@ Or add permanently to `~/.claude/settings.json` (global) or `.claude/settings.js
 {
   "mcpServers": {
     "malhaus": {
-      "url": "http://your-server:8001/mcp"
+      "url": "https://your-domain.com/mcp"
     }
   }
 }
@@ -199,7 +211,7 @@ Config file location:
 {
   "mcpServers": {
     "malhaus": {
-      "url": "http://your-server:8001/mcp"
+      "url": "https://your-domain.com/mcp"
     }
   }
 }
@@ -226,7 +238,7 @@ In Cursor settings → MCP, or directly in `~/.cursor/mcp.json`:
   "servers": {
     "malhaus": {
       "transport": "http",
-      "url": "http://your-server:8001/mcp"
+      "url": "https://your-domain.com/mcp"
     }
   }
 }
@@ -251,7 +263,7 @@ In `~/.continue/config.json`:
       {
         "transport": {
           "type": "http",
-          "url": "http://your-server:8001/mcp"
+          "url": "https://your-domain.com/mcp"
         }
       }
     ]
@@ -286,8 +298,8 @@ import sys
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-# Point this at your malhaus instance (port 8001, path /mcp)
-SERVER_URL = os.environ.get("MALHAUS_MCP_URL", "http://your-server:8001/mcp")
+# Set MALHAUS_MCP_URL env var or replace the default below
+SERVER_URL = os.environ.get("MALHAUS_MCP_URL", "https://your-domain.com/mcp")
 
 
 async def _call(tool: str, args: dict) -> str:
@@ -380,7 +392,7 @@ MCP servers. Config file: `~/.config/opencode/config.json` (Linux/macOS) or
     "servers": {
       "malhaus": {
         "type": "remote",
-        "url": "http://your-server:8001/mcp"
+        "url": "https://your-domain.com/mcp"
       }
     }
   }
@@ -415,7 +427,7 @@ import os
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-MALHAUS_MCP_URL = "http://your-server:8001/mcp"   # or internal IP if VPC-peered
+MALHAUS_MCP_URL = "https://your-domain.com/mcp"   # or internal IP if VPC-peered
 
 
 async def analyze_dbfs_file(dbfs_path: str) -> str:
@@ -487,7 +499,7 @@ from pyspark.sql import functions as F
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-MALHAUS_MCP_URL = "http://your-server:8001/mcp"
+MALHAUS_MCP_URL = "https://your-domain.com/mcp"
 
 
 async def _triage_one(dbfs_path: str) -> dict:
@@ -542,7 +554,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from openai import OpenAI   # or any compatible client
 
-MALHAUS_MCP_URL = os.environ.get("MALHAUS_MCP_URL", "http://your-server:8001/mcp")
+MALHAUS_MCP_URL = os.environ.get("MALHAUS_MCP_URL", "https://your-domain.com/mcp")
 LLM_BASE_URL    = os.environ.get("LLM_BASE_URL",    "https://api.openai.com/v1")
 LLM_API_KEY     = os.environ.get("LLM_API_KEY",     "sk-...")
 LLM_MODEL       = os.environ.get("LLM_MODEL",       "gpt-4o")

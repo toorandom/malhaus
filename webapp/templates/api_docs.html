@@ -330,20 +330,20 @@ curl http://localhost:8001/mcp</code></pre>
 
       <h3 class="section-title" style="font-size:14px; margin-top:22px;">Port layout</h3>
       <div style="background:var(--panel2);border:1px solid rgba(255,255,255,.10);border-radius:8px;padding:14px 16px;margin-bottom:12px;font-size:12px;line-height:1.9;">
-        <strong>Port 80 / 443</strong> — nginx → web UI + REST API (<span class="mono">https://your-server/</span>)<br>
+        <strong>Port 80 / 443</strong> — nginx → web UI + REST API + <strong>/mcp</strong> (<span class="mono">https://your-domain.com/mcp</span>)<br>
         <strong>Port 8000</strong> — gunicorn (internal only, not exposed outside Docker)<br>
-        <strong>Port 8001</strong> — MCP server (<span class="mono">http://your-server:8001/mcp</span>) — <em>this is what MCP clients connect to</em>
+        <strong>Port 8001</strong> — MCP process (internal only — nginx proxies <span class="mono">/mcp</span> here)
       </div>
       <p class="note">
-        The MCP server runs as a second process inside the container, started alongside the web app.
-        MCP clients connect directly to port 8001 — they do <strong>not</strong> go through nginx.
-        Make sure port 8001 is open in your firewall for the machines that need MCP access.
-        Clients do not need anything installed locally — just the URL.
+        The MCP server runs as a second process inside the container on port 8001.
+        nginx proxies <span class="mono" style="font-size:12px;">/mcp</span> to it, so MCP clients connect via
+        <span class="mono" style="font-size:12px;">https://your-domain.com/mcp</span> — the same hostname and port as the web UI,
+        with TLS. Port 8001 is never exposed externally. Nothing needs to be installed on the client machine.
       </p>
 
       <h3 class="section-title" style="font-size:14px; margin-top:22px;">Client: Claude Code (CLI)</h3>
 <pre><code class="language-bash"># One-time registration — nothing to install locally, just a URL
-claude mcp add --transport http malhaus http://your-server:8001/mcp
+claude mcp add --transport http malhaus https://your-domain.com/mcp
 
 # Verify it is registered
 claude mcp list</code></pre>
@@ -351,7 +351,7 @@ claude mcp list</code></pre>
 <pre><code class="language-json">{
   "mcpServers": {
     "malhaus": {
-      "url": "http://your-server:8001/mcp"
+      "url": "https://your-domain.com/mcp"
     }
   }
 }</code></pre>
@@ -378,7 +378,7 @@ claude mcp list</code></pre>
 <pre><code class="language-json">{
   "mcpServers": {
     "malhaus": {
-      "url": "http://your-server:8001/mcp"
+      "url": "https://your-domain.com/mcp"
     }
   }
 }</code></pre>
@@ -394,7 +394,7 @@ claude mcp list</code></pre>
     "servers": {
       "malhaus": {
         "type": "remote",
-        "url": "http://your-server:8001/mcp"
+        "url": "https://your-domain.com/mcp"
       }
     }
   }
@@ -462,7 +462,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 # Set MALHAUS_MCP_URL or edit the default below
-SERVER_URL = os.environ.get("MALHAUS_MCP_URL", "http://your-server:8001/mcp")
+SERVER_URL = os.environ.get("MALHAUS_MCP_URL", "https://your-domain.com/mcp")
 
 
 async def _call(tool: str, args: dict) -> str:
@@ -539,7 +539,7 @@ if __name__ == "__main__":
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-MALHAUS_MCP_URL = "http://your-server:8001/mcp"   # reachable from Databricks cluster
+MALHAUS_MCP_URL = "https://your-domain.com/mcp"   # reachable from Databricks cluster
 
 
 async def analyze_dbfs_file(dbfs_path: str) -> str:

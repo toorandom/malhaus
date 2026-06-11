@@ -15,7 +15,8 @@ Optional env vars:
   MALHAUS_INTERNAL_URL — internal REST base URL (default http://localhost:8000)
 
 Connect from any MCP client:
-  URL: http://your-server:8001/mcp   (Streamable HTTP transport)
+  URL: https://your-domain.com/mcp       (via nginx on 443 — recommended)
+  URL: http://your-server:8001/mcp       (direct, no TLS — fallback / dev)
 """
 
 import contextvars
