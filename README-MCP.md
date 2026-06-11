@@ -1,232 +1,129 @@
 # malhaus MCP Server
 
-malhaus exposes a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server so that AI agents — Claude, Cursor, Continue, and any other MCP-compatible client — can submit files or URLs for triage and reason over the results natively, without leaving the agent session.
+malhaus exposes a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server so that AI
+agents — Claude Code, Claude Desktop, Cursor, Continue, and any other MCP-compatible client — can
+submit files or URLs for malware triage and reason over the results natively, without leaving the
+agent session.
 
-A live instance is available at **https://grothendieck.ff2.nl** — you can point an MCP client there to try it before deploying your own.
-
-> **Implementation note:** The MCP server and its OAuth 2.0 layer are built on top of the REST API described in `README-API.md`. Set up the REST API first.
-
----
-
-## How it works
-
-The agent has access to a single tool: **`analyze`**.
-
-- The agent calls `analyze` with a file path or URL
-- The MCP server submits to the REST API, polls internally until done, and returns the full structured result to the agent
-- The agent reasons over verdict, reasons, tool outputs, and optionally images or the PCA 2D projection
-- Every submission appears in the malhaus web index at `/report/<sha256>` like any other report
-
-The agent decides what to do with the result — it is not prompted or steered by the server.
+The MCP server runs on **port 8001** inside the same container as the web app. It uses the
+**Streamable HTTP** transport. Nothing needs to be installed on the client machine — you only need
+the server URL.
 
 ---
 
-## Authentication — OAuth 2.0 client credentials
+## Prerequisites
 
-Remote MCP uses **OAuth 2.0 `client_credentials` grant** (machine-to-machine). This is the same key store as the REST API, wrapped in a standard token exchange.
+1. malhaus must be running (`docker compose up -d --build`)
+2. You need an API key issued by the admin panel (Admin → API Keys → Create key)
+3. The key must be set in `.env` as `MALHAUS_MCP_API_KEY` before the container starts
 
-### Creating credentials (server-side, admin only)
+---
+
+## Server setup (one-time)
 
 ```bash
-python manage_keys.py create --label "Claude Desktop — Alice" --rate-limit 60
+# 1. Log in to the malhaus admin panel
+#    Admin → API Keys → Create key
+#    Label it e.g. "mcp-internal"
+#    Copy the generated key — it looks like: mh_a3f9c2...
+
+# 2. Open .env and fill in the placeholder that is already there
+#    Find this line:
+#      MALHAUS_MCP_API_KEY=mh_REPLACE_WITH_YOUR_KEY_FROM_ADMIN_PANEL
+#    Replace the placeholder with the real key:
+#      MALHAUS_MCP_API_KEY=mh_a3f9c2e1...
+nano ~/malhaus/.env
+
+# 3. Rebuild and restart the container
+cd ~/malhaus
+docker compose up --build -d
+
+# 4. Verify the MCP server is up
+curl http://localhost:8001/mcp
+# Expected output: {"jsonrpc":"2.0","error":{"message":"Not Acceptable..."}}
+# That error is normal — curl does not send the SSE Accept header.
+# Any response at all means the server is running.
 ```
 
-This prints a `mh_` token. That token is your **client secret**. The `key_id` is your **client ID**.
-
-```
-  Token  : mh_<your-64-hex-token>
-  Key ID : 227e520f-6020-498a-9954-c48c461b3a33
-```
-
-Keep both values — you will need them to configure each MCP client.
-
-### Token exchange endpoint
-
-```
-POST /oauth/token
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=client_credentials
-&client_id=227e520f-6020-498a-9954-c48c461b3a33
-&client_secret=mh_<your-64-hex-token>
-```
-
-Response:
-
-```json
-{
-  "access_token": "<short-lived JWT or opaque token>",
-  "token_type":   "Bearer",
-  "expires_in":   3600
-}
-```
-
-MCP clients that support OAuth handle this exchange automatically — you only provide the `client_id` and `client_secret` in the client config.
-
-### Revoking credentials
-
-```bash
-python manage_keys.py revoke 227e520f-6020-498a-9954-c48c461b3a33
-```
-
-Takes effect immediately on the next request.
+The key is used **only inside the container** — the MCP server uses it to submit jobs to the REST
+API on your behalf. It is **not** exposed to MCP clients and never leaves the server.
 
 ---
 
-## Sending local files to the MCP tool
+## Available tools
 
-MCP tool parameters are JSON — there is no binary streaming in the protocol. The `analyze` tool therefore accepts three input modes:
+| Tool | Parameters | What it does |
+|------|------------|--------------|
+| `analyze_file` | `file_b64` (required), `filename` (optional) | Analyze a file from base64-encoded content. The client reads the file and encodes it. |
+| `analyze_url` | `url` (required) | Tell the server to download a file from an HTTP/HTTPS URL and analyze it. |
+| `analyze_sha256` | `sha256` (required) | Retrieve a cached result for a previously analyzed file. Instant if found. |
 
-| Mode | When to use |
-|------|-------------|
-| `url` | File is reachable via HTTP/HTTPS — the server downloads it. Simplest. |
-| `file_path` | File already exists on the malhaus server's filesystem. |
-| `file_id` | File is local to the agent's machine. Upload first, then analyze. |
-
-For the `file_id` pattern the agent makes two calls:
+All three tools return a plain-text summary:
 
 ```
-1. POST https://<your-domain>/api/v1/upload   (multipart, Bearer token)
-   → {"file_id": "abc-123", "expires_in": 3600}
+Verdict: LIKELY_MALWARE  (confidence 91%)
+File type: pe
+SHA-256: 4d4a8de9f4...
+Heuristic score: 74/100
 
-2. analyze(file_id="abc-123")                        (MCP tool call, JSON)
-   → verdict, reasons, tool outputs
+Top reasons:
+  - High entropy in .text section consistent with packing or encryption
+  - Imports VirtualAllocEx and WriteProcessMemory (process injection pattern)
+  - No valid Authenticode signature
+  - Mutex name matches known AgentTesla variant
+
+Full report: https://your-malhaus-instance.example.com/report/4d4a8de9f4...
 ```
-
-The staged file is consumed on first use and expires after 1 hour if unused.
-
-See [`api_examples/mcp_analyze_file.sh`](api_examples/mcp_analyze_file.sh) and [`api_examples/analyze_file.py`](api_examples/analyze_file.py) for working examples of this pattern.
 
 ---
 
-## The `analyze` tool
+## How file analysis works
 
-### Input schema
+### Analyzing a local file (on the client machine)
 
-```json
-{
-  "name": "analyze",
-  "description": "Submit a file or URL to the malhaus malware triage pipeline. Returns verdict, confidence, reasoning, and detailed tool outputs. Optionally includes entropy/bigram/compression images and a PCA 2D projection of the byte trigram cloud.",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "file_path": {
-        "type": "string",
-        "description": "Absolute path to a local file to analyze"
-      },
-      "url": {
-        "type": "string",
-        "description": "HTTP/HTTPS URL to download and analyze"
-      },
-      "file_id": {
-        "type": "string",
-        "description": "ID returned by POST /api/v1/upload — use when the agent has a local file. Upload the file first via the REST upload endpoint, then pass the file_id here. Expires after 1 hour."
-      },
-      "use_ghidra": {
-        "type": "boolean",
-        "description": "Run Ghidra headless analysis (slower, deeper — PE/ELF only)",
-        "default": false
-      },
-      "archive_password": {
-        "type": "string",
-        "description": "Password for encrypted ZIP/RAR archives"
-      },
-      "include_images": {
-        "type": "boolean",
-        "description": "Include entropy profile, compression curve, and bigram matrix images",
-        "default": false
-      },
-      "include_takens2d": {
-        "type": "boolean",
-        "description": "Include PCA 2D projection of the byte trigram point cloud",
-        "default": false
-      }
-    },
-    "oneOf": [
-      { "required": ["file_path"] },
-      { "required": ["url"] },
-      { "required": ["file_id"] }
-    ]
-  }
-}
+The MCP server runs on your server — it cannot access files on the machine where the AI agent is
+running. When you ask the agent to analyze a local file, the **client** reads the file, encodes it
+as base64, and passes the bytes to `analyze_file`. The server never touches your filesystem.
+
+**Flow:**
+```
+Your machine has:  /home/analyst/samples/suspicious.exe   (Linux)
+                   C:\Users\analyst\Downloads\invoice.exe  (Windows)
+
+1. AI agent reads the file from disk
+2. AI agent base64-encodes the raw bytes
+3. AI agent calls analyze_file(file_b64="TVqQAAMA...", filename="suspicious.exe")
+4. MCP server receives the bytes, writes a temp file, runs the full analysis pipeline
+5. MCP server returns verdict + top reasons + report URL
 ```
 
-### Output — always returned
+### Analyzing a remote file (by URL)
 
-```json
-{
-  "sha256":   "e3b0c442...",
-  "report_url": "http://your-server/report/e3b0c442...",
-  "verdict": {
-    "risk_level": "likely_malware",
-    "confidence": 92,
-    "file_type":  "PE32 executable"
-  },
-  "heuristic_score": 74,
-  "top_reasons": [
-    "High entropy sections consistent with packing",
-    "Imports VirtualAlloc, WriteProcessMemory",
-    "No valid authenticode signature"
-  ],
-  "tools_used": ["mandatory_authenticode_verify", "mandatory_objdump_pe_headers", "..."],
-  "tool_outputs": {
-    "mandatory_objdump_pe_headers": {
-      "stdout": "...",
-      "stderr": "",
-      "error": null
-    }
-  }
-}
+When the file is already reachable over HTTP/HTTPS, the flow is simpler:
+
+```
+1. AI agent calls analyze_url(url="https://cdn.example.com/payload.ps1")
+2. MCP server downloads the file from that URL
+3. MCP server runs the full analysis pipeline
+4. MCP server returns verdict + top reasons + report URL
 ```
 
-### Output — with `include_images: true`
+### Checking a cached result
 
-Adds an `images` object with base64 PNG + interpretation for:
-- `entropy_profile` — Shannon entropy per 256-byte block across the file
-- `compression_curve` — Kolmogorov complexity approximation (zlib/bz2/lzma)
-- `bigram_matrix` — 256×256 byte transition heatmap (log scale)
+If you already know the SHA-256 of a file that was analyzed before, you can skip re-uploading:
 
-### Output — with `include_takens2d: true`
-
-Adds `takens2d`:
-- `b64` — PCA 2D projection of the byte trigram (ℝ³) point cloud, rendered as PNG
-- `interpretation` — text description of the scatter pattern
+```
+1. AI agent calls analyze_sha256(sha256="4d4a8de9f4...")
+2. If previously analyzed: instant cached result
+3. If not found: message asking you to submit via analyze_file or analyze_url
+```
 
 ---
 
-## Configuring MCP clients
+## Client configuration
 
-Replace `YOUR_SERVER` with your malhaus hostname (e.g. `https://malhaus.example.com`), `YOUR_CLIENT_ID` with the `key_id`, and `YOUR_CLIENT_SECRET` with the `mh_` token.
-
----
-
-### Claude Desktop
-
-Config file location:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "malhaus": {
-      "transport": "sse",
-      "url": "YOUR_SERVER/mcp/sse",
-      "oauth": {
-        "clientId":     "YOUR_CLIENT_ID",
-        "clientSecret": "YOUR_CLIENT_SECRET",
-        "tokenUrl":     "YOUR_SERVER/oauth/token",
-        "grantType":    "client_credentials"
-      }
-    }
-  }
-}
-```
-
-After saving, restart Claude Desktop. You will see **malhaus** in the tools panel. Ask Claude:
-
-> "Analyze the file at /tmp/suspicious.exe and tell me if it's malware."
-> "Submit https://example.com/payload.bin to malhaus and summarize the findings."
+Replace `your-server` with the hostname or IP of your malhaus instance (e.g. `malhaus.example.com`
+or `192.168.1.50`). Port 8001 must be reachable from the client.
 
 ---
 
@@ -235,42 +132,88 @@ After saving, restart Claude Desktop. You will see **malhaus** in the tools pane
 **One-time setup:**
 
 ```bash
-claude mcp add malhaus \
-  --transport sse \
-  --url YOUR_SERVER/mcp/sse \
-  --oauth-client-id YOUR_CLIENT_ID \
-  --oauth-client-secret YOUR_CLIENT_SECRET \
-  --oauth-token-url YOUR_SERVER/oauth/token
+claude mcp add --transport http malhaus http://your-server:8001/mcp
 ```
 
-Or manually in `.claude/settings.json` (project) or `~/.claude/settings.json` (global):
+Or add permanently to `~/.claude/settings.json` (global) or `.claude/settings.json` (project):
 
 ```json
 {
   "mcpServers": {
     "malhaus": {
-      "transport": "sse",
-      "url": "YOUR_SERVER/mcp/sse",
-      "oauth": {
-        "clientId":     "YOUR_CLIENT_ID",
-        "clientSecret": "YOUR_CLIENT_SECRET",
-        "tokenUrl":     "YOUR_SERVER/oauth/token",
-        "grantType":    "client_credentials"
-      }
+      "url": "http://your-server:8001/mcp"
     }
   }
 }
 ```
 
-**Usage in a Claude Code session:**
+**Usage — analyze a local file:**
 
 ```
-/mcp maltriage analyze file_path=/tmp/ransomware.exe include_images=true
+You: Analyze /home/analyst/samples/suspicious.exe for malware
 ```
 
-Or just talk to Claude naturally — it will call the tool when needed:
+Claude will read `/home/analyst/samples/suspicious.exe` from the filesystem, base64-encode it, call
+`analyze_file`, and explain the result.
 
-> "Use malhaus to analyze this file: /home/user/downloads/invoice.doc"
+```
+You: Check if C:\Users\analyst\Downloads\invoice.exe is safe to open
+```
+
+Same flow on Windows — Claude reads the file from that path.
+
+**Usage — analyze a remote URL:**
+
+```
+You: Use malhaus to check https://cdn.example.com/updater.ps1
+```
+
+Claude calls `analyze_url(url="https://cdn.example.com/updater.ps1")` — the server downloads and
+analyzes it.
+
+**Usage — check a cached result:**
+
+```
+You: Has malhaus already analyzed SHA-256 4d4a8de9f4c07e6b8b23c2a1e0f6d3a9...?
+```
+
+Claude calls `analyze_sha256` with the hash and returns the cached verdict if it exists.
+
+**Usage — batch analysis:**
+
+```
+You: Analyze all .exe files in /home/analyst/samples/ and give me a risk summary table
+```
+
+Claude will call `analyze_file` for each file in sequence and build a results table.
+
+---
+
+### Claude Desktop
+
+Config file location:
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "malhaus": {
+      "url": "http://your-server:8001/mcp"
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving. The **malhaus** tool will appear in the tools panel.
+
+Example prompts after connecting:
+
+```
+Analyze /tmp/suspicious.exe and tell me if it is malware
+Check https://example.com/payload.bin using malhaus and summarize the findings
+Is the file at C:\malware\dropper.exe safe? Use malhaus to analyze it
+```
 
 ---
 
@@ -282,21 +225,18 @@ In Cursor settings → MCP, or directly in `~/.cursor/mcp.json`:
 {
   "servers": {
     "malhaus": {
-      "transport": "sse",
-      "url": "YOUR_SERVER/mcp/sse",
-      "auth": {
-        "type":         "oauth2",
-        "clientId":     "YOUR_CLIENT_ID",
-        "clientSecret": "YOUR_CLIENT_SECRET",
-        "tokenUrl":     "YOUR_SERVER/oauth/token",
-        "grantType":    "client_credentials"
-      }
+      "transport": "http",
+      "url": "http://your-server:8001/mcp"
     }
   }
 }
 ```
 
-Cursor will use the `analyze` tool automatically when you ask the agent to examine a suspicious file.
+Example prompt in Cursor agent mode:
+
+```
+Use malhaus to analyze /home/user/projects/suspicious_lib.so before I import it
+```
 
 ---
 
@@ -310,14 +250,8 @@ In `~/.continue/config.json`:
     "modelContextProtocolServers": [
       {
         "transport": {
-          "type": "sse",
-          "url":  "YOUR_SERVER/mcp/sse"
-        },
-        "auth": {
-          "type":         "oauth2",
-          "clientId":     "YOUR_CLIENT_ID",
-          "clientSecret": "YOUR_CLIENT_SECRET",
-          "tokenUrl":     "YOUR_SERVER/oauth/token"
+          "type": "http",
+          "url": "http://your-server:8001/mcp"
         }
       }
     ]
@@ -327,530 +261,560 @@ In `~/.continue/config.json`:
 
 ---
 
-### GitHub Copilot in VS Code
+### Python client (any platform)
 
-Create `.vscode/mcp.json` in your workspace (or add to user `settings.json` under `mcp.servers`):
-
-```json
-{
-  "servers": {
-    "malhaus": {
-      "type": "sse",
-      "url": "YOUR_SERVER/mcp/sse",
-      "auth": {
-        "type":         "oauth2",
-        "clientId":     "YOUR_CLIENT_ID",
-        "clientSecret": "YOUR_CLIENT_SECRET",
-        "tokenUrl":     "YOUR_SERVER/oauth/token",
-        "grantType":    "client_credentials"
-      }
-    }
-  }
-}
-```
-
-Commit `.vscode/mcp.json` to share the server config with your team — each developer supplies their own credentials via environment variables rather than plaintext:
-
-```json
-"clientSecret": "${env:MALTRIAGE_CLIENT_SECRET}"
-```
-
-After VS Code reloads, switch Copilot Chat to **Agent** mode and ask:
-
-> "Use malhaus to analyze `/tmp/suspicious.exe` and explain what it does."
-
----
-
-### Azure AI Foundry Agent Service
-
-Azure AI Foundry agents support external MCP servers as tool sources via the **Azure AI Projects SDK**:
+Install the MCP library: `pip install mcp`
 
 ```python
+#!/usr/bin/env python3
+"""
+malhaus MCP client — analyze files and URLs via the malhaus MCP server.
+
+Usage:
+  python malhaus_mcp.py file /home/analyst/samples/suspicious.exe
+  python malhaus_mcp.py file C:\\Users\\analyst\\Downloads\\invoice.exe
+  python malhaus_mcp.py url  https://cdn.example.com/payload.ps1
+  python malhaus_mcp.py sha256 4d4a8de9f4c07e6b8b23c2a1e0f6d3a9...
+
+Requirements:
+  pip install mcp
+"""
+import asyncio
+import base64
 import os
-import requests as http_req
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import McpTool
-from azure.identity import DefaultAzureCredential
+import sys
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 
-# Connect to your Azure AI Foundry project
-client = AIProjectClient.from_connection_string(
-    conn_str=os.environ["AIPROJECT_CONNECTION_STRING"],
-    credential=DefaultAzureCredential(),
-)
+# Point this at your malhaus instance (port 8001, path /mcp)
+SERVER_URL = os.environ.get("MALHAUS_MCP_URL", "http://your-server:8001/mcp")
 
-# Acquire a malhaus access token
-def get_access_token() -> str:
-    resp = http_req.post(
-        "YOUR_SERVER/oauth/token",
-        data={
-            "grant_type":    "client_credentials",
-            "client_id":     os.environ["MALTRIAGE_CLIENT_ID"],
-            "client_secret": os.environ["MALTRIAGE_CLIENT_SECRET"],
-        },
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
 
-# Create an agent with maltriage wired in as an MCP tool
-agent = client.agents.create_agent(
-    model="gpt-4o",
-    name="malware-triage-agent",
-    instructions=(
-        "You are a malware analyst. When given a file path or URL, "
-        "use the maltriage analyze tool and summarise the findings clearly."
-    ),
-    tools=[
-        McpTool(
-            server_url="YOUR_SERVER/mcp/sse",
-            server_label="malhaus",
-            allowed_tools=["analyze"],
-            headers={"Authorization": f"Bearer {get_access_token()}"},
-        )
-    ],
-)
+async def _call(tool: str, args: dict) -> str:
+    async with streamablehttp_client(SERVER_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool, args)
+            return result.content[0].text
 
-# Run a conversation thread
-thread = client.agents.create_thread()
-client.agents.create_message(
-    thread_id=thread.id,
-    role="user",
-    content="Analyze https://example.com/payload.exe and tell me if it is malware.",
-)
-run = client.agents.create_and_process_run(
-    thread_id=thread.id,
-    agent_id=agent.id,
-)
-messages = client.agents.list_messages(thread_id=thread.id)
-print(messages.get_last_text_message_by_role("assistant").text.value)
-```
 
-**Store credentials in Azure Key Vault** (recommended):
+async def analyze_local_file(path: str) -> str:
+    """
+    Read a file from the local filesystem, base64-encode it,
+    and submit it to the malhaus MCP server for analysis.
 
-```python
-from azure.keyvault.secrets import SecretClient
+    The file is read on THIS machine (the client), not on the server.
+    The server receives only the encoded bytes and the filename — it
+    never accesses the client filesystem directly.
 
-kv = SecretClient(
-    vault_url=f"https://{os.environ['KEYVAULT_NAME']}.vault.azure.net",
-    credential=DefaultAzureCredential(),
-)
-client_id     = kv.get_secret("malhaus-client-id").value
-client_secret = kv.get_secret("malhaus-client-secret").value
-```
+    Examples:
+      await analyze_local_file("/home/analyst/samples/dropper.exe")
+      await analyze_local_file("C:\\\\Users\\\\analyst\\\\Downloads\\\\invoice.doc")
+      await analyze_local_file("/mnt/evidence/2024-01-15/payload.ps1")
+    """
+    with open(path, "rb") as fh:
+        file_b64 = base64.b64encode(fh.read()).decode()
+    filename = os.path.basename(path)
+    print(f"[*] Submitting local file: {path} ({filename})", flush=True)
+    return await _call("analyze_file", {"file_b64": file_b64, "filename": filename})
 
-You can also configure the MCP server via the **Foundry portal**: Agents → Tools → Add tool → MCP server → enter your SSE URL and `Authorization` header.
 
----
+async def analyze_remote_url(url: str) -> str:
+    """
+    Tell the malhaus server to download the file at the given URL
+    and analyze it. The server fetches the file — the client does not.
 
-### Semantic Kernel (Python)
+    Examples:
+      await analyze_remote_url("https://cdn.example.com/updater.ps1")
+      await analyze_remote_url("https://dl.malware-sample-db.com/eicar.com")
+      await analyze_remote_url("http://192.168.1.100/share/suspicious.exe")
+    """
+    print(f"[*] Submitting URL: {url}", flush=True)
+    return await _call("analyze_url", {"url": url})
 
-Semantic Kernel's MCP connector wraps any MCP SSE server as a native SK plugin:
 
-```python
-import asyncio, os
-import requests as http_req
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.mcp import MCPSsePlugin
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
-from semantic_kernel.contents import ChatHistory
+async def check_sha256(sha256: str) -> str:
+    """
+    Retrieve a cached analysis result by SHA-256 hash.
+    Returns instantly if the file was previously analyzed.
 
-def get_access_token() -> str:
-    resp = http_req.post(
-        "YOUR_SERVER/oauth/token",
-        data={
-            "grant_type":    "client_credentials",
-            "client_id":     os.environ["MALTRIAGE_CLIENT_ID"],
-            "client_secret": os.environ["MALTRIAGE_CLIENT_SECRET"],
-        },
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+    Example:
+      await check_sha256("4d4a8de9f4c07e6b8b23c2a1e0f6d3a9b5e2c8d1f7a0...")
+    """
+    print(f"[*] Checking cache for SHA-256: {sha256}", flush=True)
+    return await _call("analyze_sha256", {"sha256": sha256})
 
-async def main():
-    kernel = Kernel()
-    kernel.add_service(
-        AzureChatCompletion(
-            deployment_name=os.environ["AZURE_OPENAI_DEPLOYMENT"],
-            endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        )
-    )
 
-    async with MCPSsePlugin(
-        name="malhaus",
-        url="YOUR_SERVER/mcp/sse",
-        headers={"Authorization": f"Bearer {get_access_token()}"},
-    ) as mcp_plugin:
-        kernel.add_plugin(mcp_plugin)
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage:")
+        print("  malhaus_mcp.py file   /path/to/local/file.exe")
+        print("  malhaus_mcp.py url    https://example.com/remote-file.ps1")
+        print("  malhaus_mcp.py sha256 4d4a8de9f4c07e6b...")
+        sys.exit(1)
 
-        chat = ChatHistory()
-        chat.add_user_message(
-            "Use malhaus to analyze /tmp/suspicious.exe and explain what it does."
-        )
-        response = await kernel.invoke_prompt(
-            prompt="{{$history}}",
-            arguments={"history": chat},
-            function_choice_behavior=FunctionChoiceBehavior.Auto(),
-        )
-        print(response)
+    mode, value = sys.argv[1], sys.argv[2]
 
-asyncio.run(main())
-```
-
-```bash
-pip install semantic-kernel azure-identity azure-keyvault-secrets
+    if mode == "file":
+        print(asyncio.run(analyze_local_file(value)))
+    elif mode == "url":
+        print(asyncio.run(analyze_remote_url(value)))
+    elif mode == "sha256":
+        print(asyncio.run(check_sha256(value)))
+    else:
+        print(f"Unknown mode '{mode}'. Use: file, url, or sha256")
+        sys.exit(1)
 ```
 
 ---
 
-### Azure Functions (Python) — automated triage on blob upload
+### OpenCode (terminal AI agent)
 
-This pattern triggers triage automatically whenever a file lands in an Azure Blob Storage container, then writes the result to a second container and optionally sends an alert.
-
-```python
-# function_app.py
-import json, logging, os, time
-import azure.functions as func
-import requests as http_req
-
-app = func.FunctionApp()
-
-MALTRIAGE_HOST   = os.environ["MALTRIAGE_HOST"]          # e.g. https://malhaus.example.com
-MALTRIAGE_ID     = os.environ["MALTRIAGE_CLIENT_ID"]
-MALTRIAGE_SECRET = os.environ["MALTRIAGE_CLIENT_SECRET"]
-POLL_INTERVAL    = 8    # seconds between status checks
-POLL_TIMEOUT     = 300  # give up after 5 minutes
-
-
-def _get_token() -> str:
-    resp = http_req.post(
-        f"{MALTRIAGE_HOST}/oauth/token",
-        data={
-            "grant_type":    "client_credentials",
-            "client_id":     MALTRIAGE_ID,
-            "client_secret": MALTRIAGE_SECRET,
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
-
-
-def _submit_url(url: str, token: str) -> str:
-    resp = http_req.post(
-        f"{MALTRIAGE_HOST}/api/v1/analyze",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"url": url},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["job_id"]
-
-
-def _poll(job_id: str, token: str, include: str = "") -> dict:
-    deadline = time.time() + POLL_TIMEOUT
-    params   = {"include": include} if include else {}
-    while time.time() < deadline:
-        r = http_req.get(
-            f"{MALTRIAGE_HOST}/api/v1/jobs/{job_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
-            timeout=15,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if data["status"] == "done":
-            return data
-        if data["status"] == "failed":
-            raise RuntimeError(data.get("error", "analysis failed"))
-        time.sleep(POLL_INTERVAL)
-    raise TimeoutError(f"Job {job_id} did not complete within {POLL_TIMEOUT}s")
-
-
-@app.blob_trigger(
-    arg_name="blob",
-    path="samples-incoming/{name}",
-    connection="AzureWebJobsStorage",
-)
-@app.blob_output(
-    arg_name="report",
-    path="triage-reports/{name}.json",
-    connection="AzureWebJobsStorage",
-)
-def triage_on_upload(blob: func.InputStream, report: func.Out[str]):
-    """Triggered when a file is dropped in the samples-incoming container."""
-    logging.info("Triaging: %s (%d bytes)", blob.name, blob.length)
-
-    # Build a SAS URL or use a pre-signed URL — malhaus downloads it directly
-    # Here we assume blob is publicly readable or you generate a SAS URL externally
-    blob_url = os.environ.get("BLOB_SAS_URL_TEMPLATE", "").format(name=blob.name)
-    if not blob_url:
-        raise ValueError("BLOB_SAS_URL_TEMPLATE not configured")
-
-    token  = _get_token()
-    job_id = _submit_url(blob_url, token)
-    logging.info("Job submitted: %s", job_id)
-
-    result = _poll(job_id, token, include="images")
-    logging.info(
-        "Done: %s — risk=%s confidence=%s",
-        blob.name, result["verdict"]["risk_level"], result["verdict"]["confidence"],
-    )
-
-    # Write structured report to output container
-    report.set(json.dumps(result, indent=2))
-
-    # Optional: alert on high-risk findings via Teams webhook
-    risk = result["verdict"]["risk_level"]
-    if risk in ("likely_malware", "suspicious"):
-        webhook = os.environ.get("TEAMS_WEBHOOK_URL")
-        if webhook:
-            http_req.post(webhook, json={
-                "text": (
-                    f"⚠️ **{risk.upper()}** detected\n"
-                    f"File: `{blob.name}`\n"
-                    f"Confidence: {result['verdict']['confidence']}%\n"
-                    f"Report: {MALTRIAGE_HOST}{result['report_url']}\n\n"
-                    + "\n".join(f"- {r}" for r in result["top_reasons"])
-                )
-            }, timeout=10)
-```
-
-**`host.json`**
-```json
-{ "version": "2.0", "logging": { "logLevel": { "default": "Information" } } }
-```
-
-**`requirements.txt`**
-```
-azure-functions
-requests
-```
-
-**Deploy:**
-```bash
-func azure functionapp publish <YOUR_FUNCTION_APP_NAME>
-
-# Required app settings
-az functionapp config appsettings set \
-  --name <YOUR_FUNCTION_APP_NAME> \
-  --resource-group <RG> \
-  --settings \
-    MALTRIAGE_HOST="https://malhaus.example.com" \
-    MALTRIAGE_CLIENT_ID="227e520f-..." \
-    MALTRIAGE_CLIENT_SECRET="@Microsoft.KeyVault(SecretUri=https://...)" \
-    TEAMS_WEBHOOK_URL="https://..."
-```
-
-Note: `@Microsoft.KeyVault(...)` syntax pulls the secret from Key Vault at runtime — the function never sees it in plaintext.
-
----
-
-### Azure Logic Apps — no-code triage pipeline
-
-Logic Apps lets you wire malhaus triage into broader workflows (SIEM, ticketing, email) without writing code.
-
-**Workflow: HTTP trigger → analyze → wait for result → notify**
-
-Below is the key Actions section of the Logic App ARM definition. Import it via the Logic Apps Designer or deploy with `az deployment group create`.
+[OpenCode](https://opencode.ai) is an open-source terminal-based AI coding assistant that supports
+MCP servers. Config file: `~/.config/opencode/config.json` (Linux/macOS) or
+`%APPDATA%\opencode\config.json` (Windows).
 
 ```json
 {
-  "actions": {
-
-    "Submit_to_malhaus": {
-      "type": "Http",
-      "inputs": {
-        "method": "POST",
-        "uri":    "YOUR_SERVER/api/v1/analyze",
-        "headers": {
-          "Authorization": "Bearer @{variables('MalthausToken')}",
-          "Content-Type":  "application/json"
-        },
-        "body": {
-          "url": "@triggerBody()?['file_url']"
-        }
+  "mcp": {
+    "servers": {
+      "malhaus": {
+        "type": "remote",
+        "url": "http://your-server:8001/mcp"
       }
-    },
-
-    "Extract_job_id": {
-      "type": "ParseJson",
-      "inputs": {
-        "content": "@body('Submit_to_malhaus')",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "job_id":     { "type": "string" },
-            "status_url": { "type": "string" }
-          }
-        }
-      },
-      "runAfter": { "Submit_to_malhaus": ["Succeeded"] }
-    },
-
-    "Poll_until_done": {
-      "type": "Until",
-      "expression": "@not(equals(variables('JobStatus'), 'running'))",
-      "limit": { "count": 60, "timeout": "PT10M" },
-      "actions": {
-        "Check_job": {
-          "type": "Http",
-          "inputs": {
-            "method": "GET",
-            "uri": "YOUR_SERVER/api/v1/jobs/@{body('Extract_job_id')?['job_id']}?include=images",
-            "headers": { "Authorization": "Bearer @{variables('MalthausToken')}" }
-          }
-        },
-        "Set_status": {
-          "type": "SetVariable",
-          "inputs": {
-            "name":  "JobStatus",
-            "value": "@body('Check_job')?['status']"
-          },
-          "runAfter": { "Check_job": ["Succeeded"] }
-        },
-        "Wait_before_retry": {
-          "type": "Wait",
-          "inputs": { "interval": { "count": 10, "unit": "Second" } },
-          "runAfter": { "Set_status": ["Succeeded"] }
-        }
-      },
-      "runAfter": { "Extract_job_id": ["Succeeded"] }
-    },
-
-    "Parse_result": {
-      "type": "ParseJson",
-      "inputs": {
-        "content": "@body('Check_job')",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "verdict":    { "type": "object" },
-            "top_reasons":{ "type": "array", "items": { "type": "string" } },
-            "report_url": { "type": "string" }
-          }
-        }
-      },
-      "runAfter": { "Poll_until_done": ["Succeeded"] }
-    },
-
-    "Notify_Teams": {
-      "type": "Http",
-      "inputs": {
-        "method": "POST",
-        "uri":    "@parameters('TeamsWebhookUrl')",
-        "headers": { "Content-Type": "application/json" },
-        "body": {
-          "text": "Triage result: **@{body('Parse_result')?['verdict']?['risk_level']}** — @{body('Parse_result')?['report_url']}"
-        }
-      },
-      "runAfter": { "Parse_result": ["Succeeded"] }
     }
-
   }
 }
 ```
 
-**Token initialisation step** — add a preceding action to fetch the OAuth token before `Submit_to_malhaus`:
+Restart OpenCode after saving. Then use it naturally in your terminal session:
 
-```json
-"Get_maltriage_token": {
-  "type": "Http",
-  "inputs": {
-    "method": "POST",
-    "uri":    "YOUR_SERVER/oauth/token",
-    "headers": { "Content-Type": "application/x-www-form-urlencoded" },
-    "body":    "grant_type=client_credentials&client_id=@{parameters('MalthausClientId')}&client_secret=@{parameters('MalthausClientSecret')}"
-  }
-}
 ```
-
-Store `MalthausClientSecret` as a **Logic App parameter backed by Key Vault** — never hardcode it in the workflow definition.
-
-**Typical trigger options:**
-- **HTTP Request** — call from a SIEM, SOAR, or email rule
-- **Azure Blob Storage — When a blob is added** — automatic triage on upload
-- **Recurrence** — scheduled batch triage of a watchlist of URLs
+> Analyze /home/analyst/samples/suspicious.elf before I run it
+> Use malhaus to check https://cdn.example.com/payload.sh
+```
 
 ---
 
-### Any MCP client — manual OAuth token
+### Databricks (Mosaic AI / notebook)
 
-If your client does not support OAuth natively, obtain a token manually and pass it as a Bearer header:
+Use the malhaus MCP tools directly from a Databricks notebook or AI Agent via the MCP Python SDK.
+
+**Install in your cluster or notebook:**
 
 ```bash
-# Exchange credentials for an access token
-TOKEN=$(curl -s -X POST YOUR_SERVER/oauth/token \
-  -d "grant_type=client_credentials" \
-  -d "client_id=YOUR_CLIENT_ID" \
-  -d "client_secret=YOUR_CLIENT_SECRET" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+%pip install mcp
+```
 
-# Connect to the MCP SSE endpoint
-curl -H "Authorization: Bearer $TOKEN" \
-     -H "Accept: text/event-stream" \
-     YOUR_SERVER/mcp/sse
+**Example: analyze a file stored in DBFS or a UC Volume**
+
+```python
+import asyncio
+import base64
+import os
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+MALHAUS_MCP_URL = "http://your-server:8001/mcp"   # or internal IP if VPC-peered
+
+
+async def analyze_dbfs_file(dbfs_path: str) -> str:
+    """
+    Read a file from DBFS (e.g. /dbfs/FileStore/samples/suspicious.exe)
+    or a Unity Catalog Volume (e.g. /Volumes/main/samples/incoming/malware.exe),
+    encode it, and submit to malhaus for analysis.
+
+    Parameters
+    ----------
+    dbfs_path : str
+        Absolute POSIX path as seen from the driver node, e.g.:
+          /dbfs/FileStore/malware-samples/dropper.exe
+          /Volumes/main/security/incoming/suspicious.ps1
+    """
+    with open(dbfs_path, "rb") as fh:
+        file_b64 = base64.b64encode(fh.read()).decode()
+    filename = os.path.basename(dbfs_path)
+
+    async with streamablehttp_client(MALHAUS_MCP_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "analyze_file",
+                {"file_b64": file_b64, "filename": filename},
+            )
+            return result.content[0].text
+
+
+async def analyze_url(url: str) -> str:
+    """
+    Tell malhaus to download a file from a URL and analyze it.
+    Useful for files stored in Azure Blob Storage, S3, or any HTTP endpoint.
+
+    Parameters
+    ----------
+    url : str
+        Publicly reachable URL, e.g.:
+          https://storage.googleapis.com/my-bucket/samples/payload.exe
+          https://myaccount.blob.core.windows.net/container/file.ps1?<SAS_TOKEN>
+    """
+    async with streamablehttp_client(MALHAUS_MCP_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("analyze_url", {"url": url})
+            return result.content[0].text
+
+
+# ── Run in a notebook cell ────────────────────────────────────────────────────
+
+# Analyze a file from a Unity Catalog Volume:
+result = asyncio.run(analyze_dbfs_file(
+    "/Volumes/main/security/incoming/suspicious_dropper.exe"
+))
+print(result)
+
+# Analyze a file from a presigned S3/Azure Blob URL:
+result = asyncio.run(analyze_url(
+    "https://myaccount.blob.core.windows.net/samples/invoice.doc?sv=2023-01-03&..."
+))
+print(result)
+```
+
+**Example: batch triage of all files in a Delta table**
+
+```python
+import asyncio, base64, os
+from pyspark.sql import functions as F
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+MALHAUS_MCP_URL = "http://your-server:8001/mcp"
+
+
+async def _triage_one(dbfs_path: str) -> dict:
+    with open(dbfs_path, "rb") as fh:
+        file_b64 = base64.b64encode(fh.read()).decode()
+    filename = os.path.basename(dbfs_path)
+    async with streamablehttp_client(MALHAUS_MCP_URL) as (r, w, _):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            res = await s.call_tool(
+                "analyze_file", {"file_b64": file_b64, "filename": filename}
+            )
+            return {"path": dbfs_path, "result": res.content[0].text}
+
+
+# Load file paths from a Delta table
+paths = (
+    spark.table("security.malware_queue")
+    .where("status = 'pending'")
+    .select("file_path")
+    .limit(20)
+    .toPandas()["file_path"]
+    .tolist()
+)
+
+# Triage all files (sequential — adjust for your rate limits)
+results = [asyncio.run(_triage_one(p)) for p in paths]
+for r in results:
+    print(r["path"], "->", r["result"][:120], "...")
+```
+
+---
+
+### Generic Python agent (any LLM)
+
+If you want to build your own agent loop using any LLM (OpenAI, Anthropic, Gemini, local Ollama…),
+wire the MCP tools manually:
+
+```python
+#!/usr/bin/env python3
+"""
+malhaus-agent — minimal Python agent that uses malhaus MCP tools
+with any OpenAI-compatible LLM.
+
+pip install mcp openai
+"""
+import asyncio
+import base64
+import json
+import os
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+from openai import OpenAI   # or any compatible client
+
+MALHAUS_MCP_URL = os.environ.get("MALHAUS_MCP_URL", "http://your-server:8001/mcp")
+LLM_BASE_URL    = os.environ.get("LLM_BASE_URL",    "https://api.openai.com/v1")
+LLM_API_KEY     = os.environ.get("LLM_API_KEY",     "sk-...")
+LLM_MODEL       = os.environ.get("LLM_MODEL",       "gpt-4o")
+
+
+async def call_mcp(tool: str, args: dict) -> str:
+    async with streamablehttp_client(MALHAUS_MCP_URL) as (r, w, _):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            result = await s.call_tool(tool, args)
+            return result.content[0].text
+
+
+def triage_file(local_path: str) -> str:
+    """Read a local file and submit it to malhaus for analysis."""
+    with open(local_path, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode()
+    filename = os.path.basename(local_path)
+    return asyncio.run(call_mcp("analyze_file", {"file_b64": b64, "filename": filename}))
+
+
+def triage_url(url: str) -> str:
+    """Tell malhaus to download a URL and analyze it."""
+    return asyncio.run(call_mcp("analyze_url", {"url": url}))
+
+
+def triage_sha256(sha256: str) -> str:
+    """Check the malhaus cache for a previously analyzed file."""
+    return asyncio.run(call_mcp("analyze_sha256", {"sha256": sha256}))
+
+
+# Expose as OpenAI-style function definitions for the LLM
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_local_file",
+            "description": (
+                "Analyze a local file for malware using malhaus. "
+                "Pass the absolute path on the local machine. "
+                "Returns verdict, confidence, heuristic score, top reasons, IOCs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to the file on this machine, e.g.: "
+                            "/home/analyst/samples/suspicious.exe  or  "
+                            "C:\\\\Users\\\\analyst\\\\Downloads\\\\invoice.doc"
+                        ),
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_remote_url",
+            "description": (
+                "Download a file from an HTTP/HTTPS URL and analyze it with malhaus. "
+                "Use this when the file is already reachable over the internet."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "Publicly reachable URL of the file, e.g.: "
+                            "https://cdn.example.com/updater.ps1"
+                        ),
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
+
+# Dispatch LLM tool calls to malhaus
+DISPATCH = {
+    "analyze_local_file": lambda args: triage_file(args["path"]),
+    "analyze_remote_url": lambda args: triage_url(args["url"]),
+}
+
+
+def run_agent(user_message: str) -> str:
+    client = OpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a malware analyst. When asked to check a file or URL, "
+                "use the malhaus tools and explain the result clearly. "
+                "Always include the verdict, confidence, and top reasons."
+            ),
+        },
+        {"role": "user", "content": user_message},
+    ]
+
+    while True:
+        response = client.chat.completions.create(
+            model=LLM_MODEL, messages=messages, tools=TOOLS
+        )
+        msg = response.choices[0].message
+        messages.append(msg)
+
+        if not msg.tool_calls:
+            return msg.content    # final answer
+
+        for tc in msg.tool_calls:
+            args = json.loads(tc.function.arguments)
+            result = DISPATCH[tc.function.name](args)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result,
+            })
+
+
+if __name__ == "__main__":
+    import sys
+    query = " ".join(sys.argv[1:]) or (
+        "Analyze /home/analyst/samples/suspicious.exe and tell me if it is safe"
+    )
+    print(run_agent(query))
 ```
 
 ---
 
 ## Example agent sessions
 
-### Basic triage
+### Analyzing a local file (Linux)
 
-**User:** Use malhaus to check `/tmp/invoice.exe`. Is it safe to open?
+**User:** Use malhaus to check `/home/analyst/samples/invoice_march.exe`. Is it safe?
 
-**Agent (calls `analyze`):**
-```json
-{ "file_path": "/tmp/invoice.exe" }
-```
+**Agent:** calls `analyze_file` with the base64 content of `/home/analyst/samples/invoice_march.exe`
 
-**Agent (after result):**
-> The file is classified as **likely_malware** with 89% confidence. The triage engine found:
-> - Packed with UPX (high-entropy sections)
-> - Imports `CreateRemoteThread` and `VirtualAllocEx` — classic process injection
-> - No valid digital signature
+**Agent (response):**
+> The file is classified as **LIKELY_MALWARE** with 91% confidence.
 >
-> Do not open this file. Full report: http://malhaus.local/report/e3b0c4…
+> Top reasons:
+> - High entropy in all sections — consistent with a packer or crypter
+> - Imports `VirtualAllocEx`, `WriteProcessMemory`, `CreateRemoteThread` (process injection)
+> - No valid digital signature
+> - Overlay data after the PE end — possible encrypted payload appended
+>
+> Do not open this file. Full report: https://malhaus.example.com/report/4d4a8de9f4...
 
 ---
 
-### Deep analysis with images
+### Analyzing a local file (Windows)
 
-**User:** Analyze this sample and show me the entropy graph. I want to understand the structure.
+**User:** Analyze `C:\Users\analyst\Downloads\free_software_installer.exe`
 
-**Agent (calls `analyze`):**
-```json
-{
-  "file_path": "/tmp/sample.bin",
-  "include_images": true,
-  "include_takens2d": true
-}
+**Agent:** reads `C:\Users\analyst\Downloads\free_software_installer.exe`, encodes it, calls `analyze_file(file_b64="TVqQAAMA...", filename="free_software_installer.exe")`
+
+**Agent (response):**
+> Verdict: **SUSPICIOUS** (confidence 67%)
+>
+> The installer is packed with UPX and could not be fully unpacked for deep analysis.
+> It contacts several external domains during install (extracted from strings).
+> No Authenticode signature is present. Recommend caution.
+>
+> Full report: https://malhaus.example.com/report/8c3a1b2e...
+
+---
+
+### Analyzing a remote URL
+
+**User:** Submit `https://cdn.example.com/patch_2024.ps1` to malhaus
+
+**Agent:** calls `analyze_url(url="https://cdn.example.com/patch_2024.ps1")`
+
+**Agent (response):**
+> Verdict: **BENIGN** (confidence 88%)
+>
+> The PowerShell script sets Windows Update registry keys and calls `wuauclt.exe /detectnow`.
+> No suspicious patterns (no downloads, no encoded payloads, no persistence mechanisms).
+>
+> Full report: https://malhaus.example.com/report/f1e2d3c4...
+
+---
+
+### Batch analysis
+
+**User:** I have three files in `/mnt/evidence/case-2024-01/`. Check all of them.
+
+**Agent:** calls `analyze_file` three times in sequence, then synthesizes:
+
+| File | Verdict | Confidence | Key finding |
+|------|---------|------------|-------------|
+| `/mnt/evidence/case-2024-01/dropper.exe` | LIKELY_MALWARE | 94% | Process injection imports, UPX packed |
+| `/mnt/evidence/case-2024-01/document.docx` | SUSPICIOUS | 61% | VBA macro with external OLE link |
+| `/mnt/evidence/case-2024-01/readme.txt` | BENIGN | 99% | Plain text, no executable content |
+
+---
+
+## Testing
+
+Run these from the server to verify the MCP server is working end-to-end:
+
+```bash
+# 1. Quick reachability check
+curl http://localhost:8001/mcp
+# Expected: {"jsonrpc":"2.0","error":{"message":"Not Acceptable..."}}
+# Any JSON response = server is up.
+
+# 2. Full tool listing + URL analysis from inside the container
+docker compose exec -T malhaus python3 - <<'EOF'
+import asyncio
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+async def test():
+    async with streamablehttp_client("http://localhost:8001/mcp") as (r, w, _):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            tools = await s.list_tools()
+            print("Tools:", [t.name for t in tools.tools])
+            # Analyze a URL
+            res = await s.call_tool("analyze_url", {
+                "url": "https://secure.eicar.org/eicar.com"
+            })
+            print(res.content[0].text)
+
+asyncio.run(test())
+EOF
+
+# 3. Test analyze_file with a known local file
+docker compose exec -T malhaus python3 - <<'EOF'
+import asyncio, base64
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+async def test():
+    async with streamablehttp_client("http://localhost:8001/mcp") as (r, w, _):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            # Read /bin/ls from inside the container and analyze it
+            with open("/bin/ls", "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode()
+            res = await s.call_tool("analyze_file", {
+                "file_b64": b64,
+                "filename": "ls"
+            })
+            print(res.content[0].text)
+
+asyncio.run(test())
+EOF
 ```
 
-**Agent (after result):**
-> The entropy profile shows a flat red plateau from offset 0x1000 to 0x8000 — entropy ≥ 7.5 bits/byte, consistent with an AES-encrypted payload. The first section (0x0–0x1000) has normal structured-code entropy, which is the loader stub. The PCA 2D projection is nearly isotropic — no clustering — confirming the encrypted region dominates the byte statistics.
-
 ---
 
-### Batch triage in a security workflow
+## Environment variables
 
-**User:** I have three samples in `/tmp/samples/`. Check all of them and give me a risk summary table.
-
-**Agent:** *(calls `analyze` three times in sequence, then synthesizes)*
-
-| File           | Risk           | Confidence | Key reason                        |
-|----------------|----------------|------------|-----------------------------------|
-| dropper.exe    | likely_malware | 94%        | Process injection imports, packed |
-| document.docx  | suspicious     | 61%        | Macro present, external OLE links |
-| installer.msi  | benign         | 88%        | Signed, no suspicious imports     |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MALHAUS_MCP_API_KEY` | **Yes** | *(none)* | API key (`mh_...`) created in the admin panel. Used internally by the MCP server. Not exposed to clients. |
+| `MALHAUS_MCP_PORT` | No | `8001` | Port the MCP server listens on. Change only if 8001 conflicts with something. |
+| `MALHAUS_INTERNAL_URL` | No | `http://localhost:8000` | Internal REST API base URL. Only change if REST API runs on a different host/port. |
+| `MALHAUS_PUBLIC_URL` | No | *(derived from request)* | Override the public base URL used in report links, e.g. `https://malhaus.example.com`. Automatically derived from the HTTP request Host header if not set. |
 
 ---
 
 ## Security notes
 
-- MCP credentials (`client_id` + `client_secret`) should be stored in your client's secret store, not in plaintext config files checked into source control
-- Access tokens are short-lived (1 hour); the client handles renewal automatically
-- Revoke a credential immediately if a workstation is compromised: `python manage_keys.py revoke <key_id>`
-- The MCP server runs on the same Flask process as the web app — no additional port needed
-- File paths passed to `analyze` are resolved on the **server**, not the client; only submit paths that exist on the malhaus host, or use the `url` parameter for remote files
+- `MALHAUS_MCP_API_KEY` is an internal credential. It allows the MCP server to submit jobs. Treat it like any other API key — do not share it or expose it in logs.
+- The MCP server has **no authentication** of its own — anyone who can reach port 8001 can call the tools. If you expose port 8001 publicly, protect it with a firewall rule or nginx auth. For internal/private deployments this is usually fine.
+- Report URLs returned by the tools point to the malhaus web UI. Those reports are accessible without authentication (same as any other report page).
+- Every MCP submission appears in the malhaus web index alongside browser submissions.
