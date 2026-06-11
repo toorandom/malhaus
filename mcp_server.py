@@ -18,14 +18,39 @@ Connect from any MCP client:
   URL: http://your-server:8001/mcp   (Streamable HTTP transport)
 """
 
+import contextvars
 import os
 import time
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 MALHAUS_INTERNAL = os.environ.get("MALHAUS_INTERNAL_URL", "http://localhost:8000")
 MALHAUS_API_KEY  = os.environ.get("MALHAUS_MCP_API_KEY", "")
+
+# Filled in per-request by HostMiddleware so _fmt() can build public report URLs
+# without requiring manual MALHAUS_PUBLIC_URL configuration.
+_request_public_base: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_public_base", default=""
+)
+
+
+class HostMiddleware(BaseHTTPMiddleware):
+    """Capture the public base URL from each incoming request's Host header."""
+    async def dispatch(self, request: StarletteRequest, call_next):
+        override = os.environ.get("MALHAUS_PUBLIC_URL", "").rstrip("/")
+        if override:
+            _request_public_base.set(override)
+        else:
+            host   = request.headers.get("host", "")
+            scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+            # Strip the MCP port (8001) — the web app is served via nginx on 80/443
+            hostname = host.split(":")[0]
+            if hostname:
+                _request_public_base.set(f"{scheme}://{hostname}")
+        return await call_next(request)
 
 _POLL_INTERVAL = 5    # seconds between status polls
 _POLL_TIMEOUT  = 360  # max seconds to wait for a result
@@ -101,9 +126,8 @@ def _fmt(data: dict) -> str:
             lines.append(f"\nIOCs ({key}): {', '.join(vals)}")
 
     report_url = data.get("report_url")
-    public_url = os.environ.get("MALHAUS_PUBLIC_URL", "").rstrip("/")
     if report_url:
-        base = public_url if public_url else MALHAUS_INTERNAL.rstrip("/")
+        base = _request_public_base.get("").rstrip("/") or MALHAUS_INTERNAL.rstrip("/")
         lines.append(f"\nFull report: {base}{report_url}")
 
     return "\n".join(lines)
@@ -197,6 +221,7 @@ def analyze_sha256(sha256: str) -> str:
 
 
 if __name__ == "__main__":
-    # host and port are set in the FastMCP constructor above.
-    # streamable_http_path defaults to /mcp — endpoint is http://host:port/mcp
-    mcp.run(transport="streamable-http")
+    import uvicorn
+    app = mcp.streamable_http_app()
+    app.add_middleware(HostMiddleware)
+    uvicorn.run(app, host="0.0.0.0", port=_MCP_PORT)
