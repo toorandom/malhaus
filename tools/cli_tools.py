@@ -1362,6 +1362,8 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
         ".doc": "office", ".xls": "office", ".ppt": "office", ".rtf": "office",
         ".docm": "office", ".xlsm": "office", ".pptm": "office",
         ".docx": "office_openxml", ".xlsx": "office_openxml", ".pptx": "office_openxml",
+        ".jsp": "shell", ".jspx": "shell", ".asp": "shell", ".aspx": "shell", ".php": "shell",
+        ".txt": "shell",
     }
 
     # Magic bytes for extension-less files (e.g. VirusTotal samples)
@@ -1387,6 +1389,14 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
             with open(f, "rb") as fh:
                 header = fh.read(8)
             ext = f.suffix.lower()
+            # For double-extension files (e.g. evil.jsp.txt), also check inner suffixes.
+            # An attacker appends .txt to disguise a webshell — walk all suffixes left-to-right
+            # so the most specific known type wins over the decoy outer extension.
+            all_exts = [s.lower() for s in f.suffixes]
+            for _e in all_exts:
+                if _e in _EXT_KIND and _e != ".txt":
+                    ext = _e
+                    break
 
             # 1. Magic-byte detection first (works for extension-less files too)
             kind_f = None
