@@ -508,7 +508,7 @@ def analyze_phishing(doc: Dict[str, Any], model: str = "", progress_cb: Optional
         elif img_chars > 2 * body_chars and body_chars < 400:
             signals.append({"signal": f"Message content is mostly image ({img_chars} chars OCR'd vs {body_chars} chars of real text)",
                             "weight": 10})
-    qr_urls = [q for r in image_rows for q in r.get("qr") or [] if re.match(r"(?i)https?://|www\.", q)]
+    qr_urls = list(dict.fromkeys(q for r in image_rows for q in r.get("qr") or [] if re.match(r"(?i)https?://|www\.", q)))
     if qr_urls:
         signals.append({"signal": "QR code in image points to " + ", ".join(u[:80] for u in qr_urls[:3])
                                   + " (QR phishing / quishing)", "weight": 25})

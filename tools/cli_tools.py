@@ -570,6 +570,19 @@ def _add_html_data_images(images: List[Dict[str, Any]], html: str, source: str) 
             continue
         _add_image(images, data, f"data-uri-{n + 1}.{m.group(1).lower()}", source)
 
+_ZBAR_ARGS: Optional[List[str]] = None
+
+def _zbar_decode(png: Path) -> List[str]:
+    """QR/barcode payloads in an image (zbarimg). --nodbus (silences the D-Bus socket warning in
+    containers) is only passed when this zbarimg build supports it; older builds reject the flag."""
+    global _ZBAR_ARGS
+    if _ZBAR_ARGS is None:
+        helptext = run(["zbarimg", "--help"], timeout=10, max_bytes=20000)
+        _ZBAR_ARGS = ["zbarimg", "--quiet", "--raw"] + (
+            ["--nodbus"] if "--nodbus" in helptext.get("stdout", "") + helptext.get("stderr", "") else [])
+    out = run(_ZBAR_ARGS + [str(png)], timeout=30, max_bytes=20000).get("stdout", "")
+    return [l.strip() for l in out.splitlines() if l.strip()]
+
 def _ocr_embedded_images(images: List[Dict[str, Any]], outdir: Path) -> Dict[str, Any]:
     """OCR embedded images (phishing text/buttons rendered as pictures to dodge text filters) and decode
     QR codes. Each image is normalised to PNG with Pillow (first GIF frame, small images upscaled);
@@ -607,25 +620,35 @@ def _ocr_embedded_images(images: List[Dict[str, Any]], outdir: Path) -> Dict[str
                     bg = Image.new("RGB", im.size, "white")
                     bg.paste(im, mask=im.split()[-1])
                     im = bg
+                # Original resolution for QR decoding: resampling blurs module edges and breaks zbarimg.
+                orig_png = imgdir / f"{img['sha256'][:16]}_orig.png"
+                im.save(orig_png, "PNG")
+                # Rescaled copy for tesseract, which reads small text better when upscaled.
                 scale = 2 if max(w, h) < 800 else (0.5 if max(w, h) > 5000 else 1)
+                png = orig_png
                 if scale != 1:
                     im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
-                png = imgdir / f"{img['sha256'][:16]}.png"
-                im.save(png, "PNG")
+                    png = imgdir / f"{img['sha256'][:16]}.png"
+                    im.save(png, "PNG")
         except Exception:  # noqa: BLE001 - corrupt / unsupported image
             out["skipped"] += 1
             continue
         row = {"name": img["name"], "source": img["source"], "sha256": img["sha256"], "width": w, "height": h,
                "text": "", "method": "", "qr": []}
         if has_zbar:
-            qr = run(["zbarimg", "--quiet", "--raw", str(png)], timeout=30, max_bytes=20000).get("stdout", "")
-            row["qr"] = [l.strip() for l in qr.splitlines() if l.strip()][:5]
+            qr = _zbar_decode(orig_png)
+            if not qr and png != orig_png:  # e.g. a tiny QR that only decodes once enlarged
+                qr = _zbar_decode(png)
+            row["qr"] = qr[:5]
         if has_tess:
             txt = run(["tesseract", str(png), "stdout"], timeout=60, max_bytes=100000).get("stdout", "")
             row["text"], row["method"] = re.sub(r"\n\s*\n+", "\n", txt).strip(), "tesseract"
-        elif png.stat().st_size < 4_000_000:
-            row["method"] = "pending_vision"
-            out["pending_b64"].append((len(out["images"]), base64.b64encode(png.read_bytes()).decode()))
+        else:
+            # vision LLM: original unless it was downscaled (huge image); upscaling only adds tokens
+            vis = png if scale < 1 else orig_png
+            if vis.stat().st_size < 4_000_000:
+                row["method"] = "pending_vision"
+                out["pending_b64"].append((len(out["images"]), base64.b64encode(vis.read_bytes()).decode()))
         out["images"].append(row)
     return out
 
@@ -682,8 +705,7 @@ def _pdf_content(path: str) -> Dict[str, Any]:
             run_jailed(["mutool", "draw", "-q", "-r", "110", "-o", str(outdir / "page%d.png"), path, "1-3"],
                        path, timeout=90, max_bytes=20000)
             pages = sorted(outdir.glob("page*.png"))[:3]
-        qr = [l.strip() for p in pages for l in
-              run(["zbarimg", "--quiet", "--raw", str(p)], timeout=30, max_bytes=20000).get("stdout", "").splitlines() if l.strip()]
+        qr = [q for p in pages for q in _zbar_decode(p)]
         if qr:
             doc.setdefault("image_ocr", []).append({"name": "rendered pages 1-3", "source": "pdf QR code", "sha256": "",
                                                     "width": 0, "height": 0, "text": "", "method": "zbarimg", "qr": qr[:10]})
