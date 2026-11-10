@@ -26,7 +26,7 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 - Supports **Gemini, OpenAI, Azure AI Foundry, Claude, DeepSeek**, and any OpenAI-compatible server (Ollama, vLLM, LM Studio)
 - REST API with Bearer token authentication and per-key rate limiting
 - **E-mail** (`.eml`, Outlook `.msg`) — sender spoofing, SPF/DKIM/DMARC, attachments analysed with the right tool
-- **Phishing analysis** for PDF, DOCX/XLSX/PPTX and e-mail — deceptive links, brand lookalikes, lure wording, credential forms, LLM read of the text; image-only PDFs are OCR'd (tesseract or vision LLM)
+- **Phishing analysis** for PDF, DOCX/XLSX/PPTX and e-mail — deceptive links, brand lookalikes, lure wording, credential forms, LLM read of the text; image-only PDFs and pictures embedded in e-mails/documents (inline images, image attachments, HTML `data:` URIs, DOCX/PPTX/XLSX media) are OCR'd (tesseract or vision LLM) and QR codes decoded (zbarimg), so text-as-image lures are caught
 - **Network artifacts** — validated URLs/domains/IPs from ASCII + UTF-16 + FLOSS strings, network-capable imports, and **domain age** (RDAP/whois) for newly registered domains
 - MCP server — AI agents (Claude, Cursor, Continue…) can call `analyze` natively
 - Mathematical analysis visualizations — entropy profile, compression curve, bigram matrix, and a 3D byte-trigram point cloud with HDBSCAN density clustering

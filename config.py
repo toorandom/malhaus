@@ -39,6 +39,8 @@ AZURE_USE_ENTRA_ID = os.environ.get("MALHAUS_AZURE_USE_ENTRA_ID", "0") == "1"
 DOMAIN_AGE_LOOKUP = os.environ.get("MALHAUS_DOMAIN_AGE_LOOKUP", "1") == "1"
 DOMAIN_AGE_MAX_DOMAINS = int(os.environ.get("MALHAUS_DOMAIN_AGE_MAX_DOMAINS", "5"))
 DOMAIN_AGE_TIMEOUT = int(os.environ.get("MALHAUS_DOMAIN_AGE_TIMEOUT", "6"))   # seconds per lookup
+IMAGE_OCR_MAX = int(os.environ.get("MALHAUS_IMAGE_OCR_MAX", "12"))               # embedded images OCR'd per file
+IMAGE_OCR_VISION_MAX = int(os.environ.get("MALHAUS_IMAGE_OCR_VISION_MAX", "6"))  # sent to vision LLM when no tesseract
 
 
 # NOTE:

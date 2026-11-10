@@ -538,6 +538,105 @@ def _ocr_pages(path: str, outdir: Path, pages: str = "1-3") -> Dict[str, Any]:
     res["page_images_b64"] = [base64.b64encode(p.read_bytes()).decode() for p in imgs if p.stat().st_size < 4_000_000]
     return res
 
+_IMG_MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpeg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"),
+              (b"BM", "bmp"), (b"II*\x00", "tiff"), (b"MM\x00*", "tiff"))
+_IMG_EXT = (".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".webp", ".tif", ".tiff")
+_RE_DATA_IMG = re.compile(r"data:image/(png|jpe?g|gif|bmp|webp)(?:;[\w=.-]+)*;base64,([A-Za-z0-9+/=\s]{200,})", re.I)
+
+def _image_type(data: bytes) -> str:
+    for magic, t in _IMG_MAGIC:
+        if data.startswith(magic):
+            return t
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return ""
+
+def _add_image(images: List[Dict[str, Any]], data: bytes, name: str, source: str) -> None:
+    """Queue an embedded image (e-mail inline part, attachment, data: URI, OOXML media) for OCR."""
+    if not data or len(data) < 600 or len(data) > 15_000_000 or len(images) >= 60:
+        return
+    if not _image_type(data):
+        return
+    h = _sha256_bytes(data)
+    if any(i["sha256"] == h for i in images):
+        return
+    images.append({"name": str(name)[:160], "source": source, "sha256": h, "data": data})
+
+def _add_html_data_images(images: List[Dict[str, Any]], html: str, source: str) -> None:
+    for n, m in enumerate(_RE_DATA_IMG.finditer(html or "")):
+        try:
+            data = base64.b64decode(re.sub(r"\s+", "", m.group(2)), validate=False)
+        except (ValueError, base64.binascii.Error):
+            continue
+        _add_image(images, data, f"data-uri-{n + 1}.{m.group(1).lower()}", source)
+
+def _ocr_embedded_images(images: List[Dict[str, Any]], outdir: Path) -> Dict[str, Any]:
+    """OCR embedded images (phishing text/buttons rendered as pictures to dodge text filters) and decode
+    QR codes. Each image is normalised to PNG with Pillow (first GIF frame, small images upscaled);
+    tracking pixels, spacers and small icons are skipped. Without tesseract the PNGs are returned so the
+    vision LLM can transcribe them."""
+    out: Dict[str, Any] = {"images": [], "pending_b64": [], "skipped": 0}
+    if not images:
+        return out
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        out["error"] = "Pillow not installed"
+        return out
+    imgdir = outdir / "embedded_images"
+    imgdir.mkdir(parents=True, exist_ok=True)
+    has_tess, has_zbar = bool(which("tesseract")), bool(which("zbarimg"))
+    max_ocr = int(os.environ.get("MALHAUS_IMAGE_OCR_MAX", "12"))
+    for img in images:
+        if len(out["images"]) >= max_ocr:
+            out["skipped"] += 1
+            continue
+        try:
+            import io
+            with Image.open(io.BytesIO(img["data"])) as im:
+                w, h = im.size
+                if w * h > 40_000_000:
+                    out["skipped"] += 1
+                    continue
+                if w < 60 or h < 20 or w * h < 6000:  # tracking pixel / spacer / bullet icon
+                    out["skipped"] += 1
+                    continue
+                im.seek(0)
+                im = ImageOps.exif_transpose(im.convert("RGBA" if "A" in im.getbands() or im.mode == "P" else "RGB"))
+                if im.mode == "RGBA":  # transparent text on white, not black
+                    bg = Image.new("RGB", im.size, "white")
+                    bg.paste(im, mask=im.split()[-1])
+                    im = bg
+                scale = 2 if max(w, h) < 800 else (0.5 if max(w, h) > 5000 else 1)
+                if scale != 1:
+                    im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+                png = imgdir / f"{img['sha256'][:16]}.png"
+                im.save(png, "PNG")
+        except Exception:  # noqa: BLE001 - corrupt / unsupported image
+            out["skipped"] += 1
+            continue
+        row = {"name": img["name"], "source": img["source"], "sha256": img["sha256"], "width": w, "height": h,
+               "text": "", "method": "", "qr": []}
+        if has_zbar:
+            qr = run(["zbarimg", "--quiet", "--raw", str(png)], timeout=30, max_bytes=20000).get("stdout", "")
+            row["qr"] = [l.strip() for l in qr.splitlines() if l.strip()][:5]
+        if has_tess:
+            txt = run(["tesseract", str(png), "stdout"], timeout=60, max_bytes=100000).get("stdout", "")
+            row["text"], row["method"] = re.sub(r"\n\s*\n+", "\n", txt).strip(), "tesseract"
+        elif png.stat().st_size < 4_000_000:
+            row["method"] = "pending_vision"
+            out["pending_b64"].append((len(out["images"]), base64.b64encode(png.read_bytes()).decode()))
+        out["images"].append(row)
+    return out
+
+def _attach_image_ocr(doc: Dict[str, Any], images: List[Dict[str, Any]], outdir: Path) -> None:
+    res = _ocr_embedded_images(images, outdir)
+    doc["image_ocr"] = res["images"]
+    doc["image_ocr_pending_b64"] = res["pending_b64"]
+    doc["image_ocr_skipped"] = res["skipped"]
+    if res.get("error"):
+        doc["image_ocr_error"] = res["error"]
+
 def _pdf_content(path: str) -> Dict[str, Any]:
     doc: Dict[str, Any] = {"format": "pdf", "text": "", "links": [], "text_method": "none"}
     outdir = _work_dir(path, "pdfdoc")
@@ -567,6 +666,27 @@ def _pdf_content(path: str) -> Dict[str, Any]:
         else:
             doc["needs_ocr"] = True
             doc["page_images_b64"] = ocr["page_images_b64"]
+    elif has_images and which("tesseract"):
+        # Text layer present, but a lure (fake button, QR code, "view document" banner) may be an image:
+        # OCR the rendered pages and keep only lines the text layer does not already contain.
+        ocr = _ocr_pages(path, outdir)
+        known = re.sub(r"\W+", "", doc["text"].lower())
+        new = [l.strip() for l in (ocr.get("text") or "").splitlines()
+               if len(re.sub(r"\W+", "", l)) >= 4 and re.sub(r"\W+", "", l.lower()) not in known]
+        if new:
+            doc["image_ocr"] = [{"name": "rendered pages 1-3", "source": "pdf page images", "sha256": "",
+                                 "width": 0, "height": 0, "text": "\n".join(new)[:20000], "method": "tesseract", "qr": []}]
+    if has_images and which("zbarimg") and which("mutool"):
+        pages = sorted(outdir.glob("page*.png")) or []
+        if not pages:
+            run_jailed(["mutool", "draw", "-q", "-r", "110", "-o", str(outdir / "page%d.png"), path, "1-3"],
+                       path, timeout=90, max_bytes=20000)
+            pages = sorted(outdir.glob("page*.png"))[:3]
+        qr = [l.strip() for p in pages for l in
+              run(["zbarimg", "--quiet", "--raw", str(p)], timeout=30, max_bytes=20000).get("stdout", "").splitlines() if l.strip()]
+        if qr:
+            doc.setdefault("image_ocr", []).append({"name": "rendered pages 1-3", "source": "pdf QR code", "sha256": "",
+                                                    "width": 0, "height": 0, "text": "", "method": "zbarimg", "qr": qr[:10]})
     return doc
 
 def _openxml_content(path: str) -> Dict[str, Any]:
@@ -605,7 +725,13 @@ def _openxml_content(path: str) -> Dict[str, Any]:
             t = a.get("Target", "")
             if t and t not in linked and not t.startswith("mailto:"):
                 doc["links"].append({"href": t, "text": ""})
+        images: List[Dict[str, Any]] = []
+        for n in names:
+            if re.match(r"(word|ppt|xl)/(media|embeddings)/", n) and n.lower().endswith(_IMG_EXT) \
+                    and z.getinfo(n).file_size < 15_000_000:
+                _add_image(images, z.read(n), n, "embedded media")
     doc["text"] = _html.unescape(re.sub(r"\n\s*\n+", "\n\n", "\n".join(parts))).strip()
+    _attach_image_ocr(doc, images, _work_dir(path, "ooxml"))
     return doc
 
 def _msg_props(ole, prefix: str = "") -> Dict[str, Any]:
@@ -627,7 +753,7 @@ def _msg_props(ole, prefix: str = "") -> Dict[str, Any]:
             props[tag] = data
     return props
 
-def _email_content(path: str) -> Dict[str, Any]:
+def _email_content(path: str, ocr_images: bool = True) -> Dict[str, Any]:
     from email import policy
     from email.parser import BytesParser, HeaderParser
     from email.utils import getaddresses, parseaddr
@@ -635,6 +761,7 @@ def _email_content(path: str) -> Dict[str, Any]:
     from agent.network_iocs import RE_URL
 
     outdir = _work_dir(path, "email")
+    images: List[Dict[str, Any]] = []
     email_d: Dict[str, Any] = {"attachments": []}
     text, html_body = "", ""
     with open(path, "rb") as fh:
@@ -686,6 +813,11 @@ def _email_content(path: str) -> Dict[str, Any]:
                 continue
             ctype = part.get_content_type()
             fname = part.get_filename()
+            if ctype.startswith("image/") and not fname and part.get_content_disposition() != "attachment":
+                # inline (cid:) image without a filename: not an attachment, but still OCR it
+                cid = str(part.get("Content-ID", "")).strip("<> ") or "inline"
+                _add_image(images, part.get_payload(decode=True) or b"", f"cid:{cid}", "inline image")
+                continue
             if fname or part.get_content_disposition() == "attachment":
                 email_d["attachments"].append({"name": fname or "unnamed", "data": part.get_payload(decode=True) or b""})
             elif ctype == "text/plain" and not text:
@@ -698,6 +830,7 @@ def _email_content(path: str) -> Dict[str, Any]:
     if html_body:
         html_text, links, forms = html_to_text_and_links(html_body)
         text = text or html_text
+        _add_html_data_images(images, html_body, "html body data: URI")
     linked = {l["href"] for l in links}
     links += [{"href": u, "text": ""} for u in RE_URL.findall(text or "") if u not in linked]
 
@@ -709,14 +842,23 @@ def _email_content(path: str) -> Dict[str, Any]:
         dest = outdir / safe
         dest.write_bytes(data)
         saved.append({"name": a["name"], "size": len(data), "sha256": _sha256_bytes(data), "path": str(dest)})
+        if _image_type(data):  # attached / inline (.msg) picture: often the whole lure or a QR code
+            _add_image(images, data, a["name"], "image attachment")
         if safe.lower().endswith((".html", ".htm", ".svg")):
-            _, att_links, att_forms = html_to_text_and_links(data.decode("utf-8", "replace"))
+            att_html = data.decode("utf-8", "replace")
+            _, att_links, att_forms = html_to_text_and_links(att_html)
             links += att_links
             forms += att_forms
+            _add_html_data_images(images, att_html, f"data: URI in {a['name']}")
     email_d["attachments"] = saved
     email_d["body_html"] = html_body[:200000]
-    return {"format": email_d["format"], "text": (text or "")[:100000], "links": links, "forms": forms,
-            "text_method": "email_body", "email": email_d}
+    doc = {"format": email_d["format"], "text": (text or "")[:100000], "links": links, "forms": forms,
+           "text_method": "email_body", "email": email_d}
+    if ocr_images:
+        _attach_image_ocr(doc, images, outdir)
+    else:
+        doc["embedded_image_count"] = len(images)
+    return doc
 
 def document_content_scan(path: str) -> Dict[str, Any]:
     """Text, links and (for e-mail) sender/attachments of a PDF, OOXML document, .eml or .msg."""
@@ -749,9 +891,11 @@ def email_parse(path: str) -> Dict[str, Any]:
     """Parse an .eml or Outlook .msg e-mail: sender (From/display name/Reply-To/Return-Path), SPF/DKIM/DMARC
     results, Received chain, subject, decoded body text, links (visible text vs real href) and attachments.
     Attachments are saved to disk and their paths listed — run other tools on them with "path"."""
-    doc = _email_content(path)
+    doc = _email_content(path, ocr_images=False)  # OCR of embedded images happens in phishing_analysis
     e = doc.get("email") or {}
     lines = _fmt_email(e)
+    if doc.get("embedded_image_count"):
+        lines.append(f"embedded images        {doc['embedded_image_count']} (OCR'd by phishing_analysis)")
     lines += ["", f"links ({len(doc['links'])}):"] + [f"  {l['href'][:200]}  text='{l['text'][:80]}'" for l in doc["links"][:60]]
     lines += ["", "body:", (doc.get("text") or "")[:6000]]
     return {"ok": True, "stdout": "\n".join(lines), "email": {k: v for k, v in e.items() if k != "body_html"},
@@ -773,6 +917,10 @@ def phishing_analysis_scan(path: str, progress_cb=None, use_llm: bool = True) ->
     for l in res["links"][:60]:
         lines.append(f"[link] {l['href'][:160]}" + (f"  text='{l['text'][:60]}'" if l["text"] else "") +
                      (f"  ! {'; '.join(l['flags'])}" if l["flags"] else ""))
+    for r in res.get("image_ocr") or []:
+        t = re.sub(r"\s+", " ", r.get("text") or "")[:300]
+        lines.append(f"[img ] {r['name']} ({r['source']}, {r['width']}x{r['height']}, {r['method'] or 'no OCR'})"
+                     + (f": {t}" if t else "") + (f"  QR: {', '.join(r['qr'])}" if r.get("qr") else ""))
     for a in res["domain_ages"]:
         lines.append(f"[age ] {a['domain']}: " + (f"{a['age_days']} days (registered {a['created']})"
                                                 if a.get("age_days") is not None else (a.get("status") or a.get("error") or "unknown")))
@@ -786,7 +934,8 @@ def phishing_analysis_scan(path: str, progress_cb=None, use_llm: bool = True) ->
 @tool
 def phishing_analysis(path: str) -> Dict[str, Any]:
     """Phishing / social-engineering analysis of a PDF, DOCX/XLSX/PPTX, .eml or .msg: extracts the text
-    (OCR or vision-LLM transcription for image-only PDFs), links with visible-text vs real-target mismatch,
+    (OCR or vision-LLM transcription for image-only PDFs and for pictures embedded in the e-mail/document,
+    QR codes decoded), links with visible-text vs real-target mismatch,
     sender spoofing (display name, Reply-To/Return-Path, SPF/DKIM/DMARC), lookalike/brand-impersonating and
     newly registered domains (RDAP/whois age), risky attachments, credential forms and lure wording, then asks
     the LLM to judge the text. Use it on attachments or embedded documents via "path"."""

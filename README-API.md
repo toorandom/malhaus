@@ -482,4 +482,7 @@ if result.get("takens2d") and result["takens2d"].get("b64"):
 - `phishing` — present for PDF, DOCX/XLSX/PPTX, `.eml` and `.msg`: `score` 0–100, `verdict`
   (`phishing` / `suspicious` / `no_strong_indicators`), `signals` (weighted), `links` (visible text vs real target,
   with flags), sender headers and attachments for e-mail, domain ages, and the LLM's read (`llm`). Image-only PDFs
-  are OCR'd (tesseract, else the vision LLM) before analysis.
+  are OCR'd (tesseract, else the vision LLM) before analysis. Pictures embedded in the e-mail/document (inline
+  `cid:` parts, image attachments, HTML `data:` URIs, OOXML media) are OCR'd and QR-decoded too; `image_ocr` lists
+  each one (`name`, `source`, `width`, `height`, `method`, `text`, `qr`) and their text is scored with the body.
+  Limits: `MALHAUS_IMAGE_OCR_MAX` (default 12) and `MALHAUS_IMAGE_OCR_VISION_MAX` (default 6).

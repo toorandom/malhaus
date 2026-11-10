@@ -18,7 +18,7 @@ sudo apt install -y \
   libimage-exiftool-perl
 
 # Document text/OCR (phishing analysis) and domain-age fallback
-sudo apt install -y mupdf-tools tesseract-ocr whois innoextract || true
+sudo apt install -y mupdf-tools tesseract-ocr zbar-tools whois innoextract || true
 
 # PE tools (best-effort)
 sudo apt install -y pev || true

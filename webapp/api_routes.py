@@ -166,7 +166,7 @@ def _phishing_out(report: dict) -> dict:
     if not ph.get("ok"):
         return {}
     keys = ("summary", "verdict", "score", "deterministic_score", "llm_score", "signals", "links",
-            "domain_ages", "email", "llm", "text_method", "notes")
+            "domain_ages", "email", "llm", "text_method", "image_ocr", "notes")
     return {k: ph.get(k) for k in keys}
 
 

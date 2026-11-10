@@ -205,6 +205,23 @@
       </div>
       {% endif %}
 
+      {% if ph.get('image_ocr') %}
+      <h3>Embedded images (OCR)</h3>
+      <div style="overflow-x:auto;">
+        <table class="netart">
+          <tr><th>image</th><th>source</th><th>OCR</th><th>text / QR</th></tr>
+          {% for r in ph.get('image_ocr') %}
+          <tr>
+            <td class="mono val">{{ r.name }}{% if r.width %}<div class="muted" style="font-size:10px;">{{ r.width }}×{{ r.height }}</div>{% endif %}</td>
+            <td class="mono muted">{{ r.source }}</td>
+            <td class="mono muted">{{ (r.method or 'none')|replace('_', ' ') }}</td>
+            <td class="mono val">{% for q in r.qr or [] %}<span class="netcls new">QR: {{ q }}</span><br>{% endfor %}{{ (r.text or '')[:600] }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+
       {% if em.get('attachments') %}
       <h3>Attachments</h3>
       <div class="codebox"><pre class="mono break">{% for a in em.get('attachments') %}{{ a.name }}  ({{ a.size }} bytes)  sha256 {{ a.sha256 }}
