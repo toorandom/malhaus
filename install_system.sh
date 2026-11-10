@@ -17,6 +17,9 @@ sudo apt install -y \
   binwalk \
   libimage-exiftool-perl
 
+# Document text/OCR (phishing analysis) and domain-age fallback
+sudo apt install -y mupdf-tools tesseract-ocr whois innoextract || true
+
 # PE tools (best-effort)
 sudo apt install -y pev || true
 

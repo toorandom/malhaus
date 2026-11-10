@@ -121,8 +121,22 @@ def _fmt(data: dict) -> str:
     for reason in reasons[:8]:
         lines.append(f"  - {reason}")
 
+    ph = data.get("phishing") or {}
+    if ph:
+        lines.append(f"\nPhishing: {ph.get('summary', '')}")
+        em = ph.get("email") or {}
+        if em.get("from"):
+            lines.append(f"  - sender: {em.get('from_name', '')} <{em.get('from')}>  reply-to: {em.get('reply_to') or '-'}")
+
+    na = data.get("network_artifacts") or {}
+    if na:
+        lines.append(f"\nNetwork artifacts: {na.get('summary', '')}")
+        for a in (na.get("domain_ages") or []):
+            if a.get("age_days") is not None:
+                lines.append(f"  - {a['domain']}: registered {a.get('created')} ({a['age_days']} days old)")
+
     for key in ("urls", "ips", "domains", "registry_paths", "mutexes"):
-        vals = (iocs.get(key) or [])[:10]
+        vals = ((na.get(key) if na else None) or iocs.get(key) or [])[:10]
         if vals:
             lines.append(f"\nIOCs ({key}): {', '.join(vals)}")
 

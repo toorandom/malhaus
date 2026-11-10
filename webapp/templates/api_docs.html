@@ -438,6 +438,14 @@ asyncio.run(main(sys.argv[1]))
           <span class="field-desc">List of strings — the most significant evidence items from the analysis.</span>
         </li>
         <li>
+          <span class="field-name">network_artifacts</span>
+          <span class="field-desc">Validated URLs, domains, IPs and e-mails found statically (with source and context), network-capable imports, and domain registration age. Certificate/vendor hosts are listed separately as <span class="mono" style="font-size:11px;">benign_infra</span>.</span>
+        </li>
+        <li>
+          <span class="field-name">phishing</span>
+          <span class="field-desc">For PDF, Office OpenXML and e-mail (.eml/.msg): phishing score 0–100, verdict, weighted signals, links (visible text vs target), sender headers, attachments and the LLM assessment. Empty for other file types.</span>
+        </li>
+        <li>
           <span class="field-name">heuristic_score</span>
           <span class="field-desc">Deterministic score 0–100 computed before the LLM pass (entropy, imports, IOC hits, etc.).</span>
         </li>

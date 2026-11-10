@@ -37,7 +37,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 
 ALLOWED_KINDS = {
     "pe", "elf", "office", "office_openxml",
-    "ps1", "shell", "js", "msi", "pdf", "lnk", "vbs", "hta", "archive",
+    "ps1", "shell", "js", "msi", "pdf", "lnk", "vbs", "hta", "archive", "email",
 }
 
 
@@ -150,6 +150,26 @@ def _job_get(job_id: str) -> dict | None:
 # Result formatting
 # ---------------------------------------------------------------------------
 
+def _network_artifacts_out(report: dict) -> dict:
+    """Validated network IOCs for API clients (items carry class/source/context)."""
+    na = ((report.get("preflight") or {}).get("mandatory_network_artifacts") or {})
+    if not na.get("ok"):
+        return {}
+    keys = ("summary", "urls", "domains", "ips", "emails", "abused_services", "benign_infra",
+            "domain_ages", "network_apis", "items")
+    return {k: na.get(k) for k in keys}
+
+
+def _phishing_out(report: dict) -> dict:
+    """Phishing analysis for documents / e-mails (empty for other kinds)."""
+    ph = ((report.get("preflight") or {}).get("mandatory_phishing_analysis") or {})
+    if not ph.get("ok"):
+        return {}
+    keys = ("summary", "verdict", "score", "deterministic_score", "llm_score", "signals", "links",
+            "domain_ages", "email", "llm", "text_method", "notes")
+    return {k: ph.get(k) for k in keys}
+
+
 def _build_html_summary(
     risk_level, confidence, file_type, sha256, report_url, report_json_url,
     heuristic_score, top_reasons, strings_score, strings_summary,
@@ -218,6 +238,8 @@ def _build_result(job: dict, include: set[str]) -> dict:
             "file_type":   v.get("file_type", ""),
         },
         "top_reasons":  v.get("top_reasons", []),
+        "network_artifacts": _network_artifacts_out(report),
+        "phishing": _phishing_out(report),
         "heuristic_score": h.get("score", 0),
         "strings_score":   sl.get("strings_score", 0),
         "strings_summary": sl.get("summary", ""),

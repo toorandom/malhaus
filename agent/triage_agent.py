@@ -58,6 +58,14 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
     snips: Dict[str, str] = {}
     if pre.get("analysis_note"):
         snips["ANALYSIS_WARNING"] = pre["analysis_note"]
+    if pre.get("mandatory_network_artifacts"):
+        snips["network_artifacts"] = _snip_stdout(pre.get("mandatory_network_artifacts"), 3000)
+    if pre.get("mandatory_installer_extract"):
+        snips["installer_extract"] = _snip_stdout(pre.get("mandatory_installer_extract"), 5000)
+    if pre.get("mandatory_phishing_analysis"):
+        snips["phishing_analysis"] = _snip_stdout(pre.get("mandatory_phishing_analysis"), 4000)
+    if pre.get("mandatory_email_parse"):
+        snips["email_parse"] = _snip_stdout(pre.get("mandatory_email_parse"), 6000)
     kind = pre.get("kind", "unknown")
     if kind == "pe":
         snips.update({
@@ -304,7 +312,7 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
                 "radare2_quick_json", "radare2_entry_disasm", "pe_section_entropy",
                 "floss_strings", "entropy_shannon", "sha256", "file_info",
                 "upx_detect", "upx_unpack", "strings_ascii", "extract_payloads",
-                "dotnet_analysis", "binwalk_scan", "pe_meta_structured"},
+                "dotnet_analysis", "binwalk_scan", "pe_meta_structured", "installer_extract"},
         "elf": {"readelf_all", "objdump_elf_dynamic", "ldd_deps",
                 "floss_strings", "entropy_shannon", "sha256", "file_info",
                 "upx_detect", "upx_unpack", "strings_ascii", "extract_payloads",
@@ -314,13 +322,19 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
                    "sha256", "file_info"},
         "office_openxml": {"openxml_list", "openxml_extract", "strings_ascii",
                            "extract_payloads", "entropy_shannon", "sha256", "file_info"},
-        "pdf":   {"pdf_analysis", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
+        "pdf":   {"pdf_analysis", "phishing_analysis", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
+        "email": {"email_parse", "phishing_analysis", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
         "lnk":   {"lnk_analysis", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
         "msi":   {"msi_extract", "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
         "jar":   {"jar_manifest", "jarsigner_verify", "jar_class_list", "jar_extract_inner", "javap_disasm",
                   "strings_ascii", "extract_payloads", "entropy_shannon", "sha256", "file_info"},
     }
     already_ran = _MANDATORY_BY_KIND.get(kind, {"entropy_shannon", "sha256", "file_info", "strings_ascii", "extract_payloads"})
+    # network_artifacts runs in preflight for every kind; kinds with inner files keep it callable via "path"
+    # (and so do unpacked installers, whose bundled files live on disk)
+    if kind not in ("msi", "archive", "jar", "office", "office_openxml", "email") \
+            and not (pre.get("mandatory_installer_extract") or {}).get("files"):
+        already_ran = already_ran | {"network_artifacts"}
     # If Ghidra ran in preflight, don't let the LLM re-call it
     if options and options.get("use_ghidra") and "mandatory_ghidra_malhaus" in pre:
         already_ran = already_ran | {"ghidra_malhaus"}
@@ -329,25 +343,31 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
     # Prevents the LLM wasting its tool budget on irrelevant tools
     # (e.g. calling script_content on a PE, or PE tools on an office doc).
     _SUPPLEMENTARY_BY_KIND = {
-        "pe":            {"ssdeep_hash", "pe_overlay_info", "pe_imphash", "readpe_all", "pesec",
+        "pe":            {"ssdeep_hash", "network_artifacts", "strings_ascii", "file_info", "script_content",
+                          "pe_section_entropy", "authenticode_verify", "pe_overlay_info", "pe_imphash", "readpe_all", "pesec",
                           "objdump_pe_headers", "objdump_pe_imports_dynamic",
                           "radare2_quick_json", "radare2_entry_disasm", "ghidra_malhaus"},
         "elf":           {"ssdeep_hash", "readelf_all", "objdump_elf_dynamic", "ldd_deps",
                           "objdump_elf_disasm", "ghidra_malhaus"},
-        "office":        {"ssdeep_hash", "olevba_json", "oledump_list", "oledump_details",
+        "office":        {"ssdeep_hash", "network_artifacts" "phishing_analysis", "olevba_json", "oledump_list", "oledump_details",
                           "oleobj_extract", "rtfobj_extract",
                           "script_content", "js_beautify", "strings_ascii", "entropy_shannon"},
-        "office_openxml":{"ssdeep_hash", "olevba_json", "oledump_list", "oledump_details",
+        "office_openxml":{"ssdeep_hash", "network_artifacts" "phishing_analysis", "olevba_json", "oledump_list", "oledump_details",
                           "openxml_list", "openxml_extract", "rtfobj_extract", "oleobj_extract",
                           "script_content", "js_beautify", "strings_ascii", "entropy_shannon"},
         "pdf":           {"ssdeep_hash", "pdf_analysis"},
+        # E-mail: attachments are saved to disk — analyse them via "path"
+        "email":         {"ssdeep_hash", "network_artifacts", "phishing_analysis", "file_info", "strings_ascii",
+                          "pdf_analysis", "openxml_list", "openxml_extract", "olevba_json", "script_content",
+                          "js_beautify", "lnk_analysis", "archive_extract", "objdump_pe_headers",
+                          "objdump_pe_imports_dynamic", "authenticode_verify", "entropy_shannon"},
         "lnk":           {"ssdeep_hash", "lnk_analysis", "exiftool_lnk", "lecmd_lnk"},
         # MSI: LLM uses path field to run PE tools on any extracted file
-        "msi":           {"ssdeep_hash", "strings_ascii", "entropy_shannon",
+        "msi":           {"ssdeep_hash", "network_artifacts", "strings_ascii", "entropy_shannon",
                           "objdump_pe_headers", "objdump_pe_imports_dynamic",
                           "pe_section_entropy", "readpe_all", "pesec",
                           "authenticode_verify"},
-        "jar":           {"ssdeep_hash", "jar_manifest", "jarsigner_verify", "jar_class_list",
+        "jar":           {"ssdeep_hash", "network_artifacts", "jar_manifest", "jarsigner_verify", "jar_class_list",
                           "javap_disasm", "jar_extract_inner",
                           "strings_ascii", "entropy_shannon", "binwalk_scan"},
         "ps1":           {"ssdeep_hash", "script_content", "shell_lint"},
@@ -356,7 +376,7 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
         "js":            {"ssdeep_hash", "script_content", "js_beautify"},
         "shell":         {"ssdeep_hash", "script_content", "shell_lint"},
         # Archive that could not be promoted — LLM can run tools on inner files
-        "archive":       {"ssdeep_hash", "archive_extract", "strings_ascii",
+        "archive":       {"ssdeep_hash", "network_artifacts" "phishing_analysis", "archive_extract", "strings_ascii",
                           "entropy_shannon", "objdump_pe_headers",
                           "objdump_pe_imports_dynamic", "pe_section_entropy"},
         # Unknown type — offer generic inspection tools only

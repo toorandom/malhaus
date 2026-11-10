@@ -3,6 +3,7 @@ import math
 from typing import Any, Dict, List, Set, Tuple
 
 from agent.imports import extract_import_names_from_text
+from agent.network_iocs import is_plausible_domain
 
 RE_URL = re.compile(r"\bhttps?://[^\s\"'<>]+", re.IGNORECASE)
 RE_DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
@@ -86,7 +87,7 @@ def filter_suspicious_lines(strings_text: str, import_names: Set[str], max_lines
             tags.append("ioc:email"); score += 5.0
         if RE_IPV4.search(s):
             tags.append("ioc:ipv4"); score += 5.0
-        if RE_DOMAIN.search(s):
+        if any(is_plausible_domain(d) for d in RE_DOMAIN.findall(s)):
             tags.append("ioc:domain"); score += 2.0
 
         if RE_REG.search(s):
@@ -155,7 +156,8 @@ def extract_iocs_from_suspicious(suspicious: List[Dict[str, Any]]) -> Dict[str, 
         for m in RE_REG.findall(s): reg.add(m)
         for m in RE_WIN_PATH.findall(s): paths.add(m)
         for m in RE_POSIX_PATH.findall(s): paths.add(m)
-        for m in RE_DOMAIN.findall(s): domains.add(m)
+        for m in RE_DOMAIN.findall(s):
+            if is_plausible_domain(m): domains.add(m.lower())
 
     return {
         "urls": sorted(urls)[:200],
@@ -174,6 +176,26 @@ except Exception:
 def _snip(s: str, n: int = 12000) -> str:
     s = s or ""
     return s[:n]
+
+def _phishing_pack(ph: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact phishing result for the LLM / heuristics (no full text or page images)."""
+    if not ph.get("ok"):
+        return {}
+    llm = ph.get("llm") or {}
+    email = ph.get("email") or {}
+    return {
+        "summary": ph.get("summary"), "score": ph.get("score"), "verdict": ph.get("verdict"),
+        "deterministic_score": ph.get("deterministic_score"), "llm_score": ph.get("llm_score"),
+        "signals": (ph.get("signals") or [])[:12],
+        "flagged_links": [l for l in ph.get("links") or [] if l.get("flags")][:20],
+        "domain_ages": ph.get("domain_ages") or [],
+        "llm": {k: llm.get(k) for k in ("verdict", "impersonated_brand", "tactics", "key_evidence", "summary") if llm.get(k)},
+        "email": {k: email.get(k) for k in ("from_name", "from", "reply_to", "return_path", "subject",
+                                            "authentication_results", "attachments") if email.get(k)},
+        "text_method": ph.get("text_method"),
+        "notes": ph.get("notes") or [],
+    }
+
 
 def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None = None) -> Dict[str, Any]:
     kind = preflight.get("kind", "unknown")
@@ -224,6 +246,12 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
 
     extracted = (preflight.get("extraction") or {}).get("extracted", []) or []
     iocs = extract_iocs_from_suspicious(suspicious)
+
+    # Whole-file validated network artifacts supersede the preview-only regex hits
+    na = preflight.get("mandatory_network_artifacts") or {}
+    if na.get("ok"):
+        for k in ("urls", "domains", "ips", "emails"):
+            iocs[k] = list(na.get(k) or [])
     
     def _s(key: str) -> str:
         """Get output snippet from a preflight tool result.
@@ -297,6 +325,13 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         "suspicious_strings": suspicious,
         "extracted_payloads": extracted[:60],
         "iocs_deterministic": iocs,
+        "installer": {k: (preflight.get("mandatory_installer_extract") or {}).get(k)
+                      for k in ("installer", "version", "ok", "error", "largest_pe")}
+                     if preflight.get("mandatory_installer_extract") else {},
+        "phishing": _phishing_pack(preflight.get("mandatory_phishing_analysis") or {}),
+        "network_artifacts": {k: na.get(k) for k in ("summary", "urls", "domains", "ips", "emails",
+                                                      "abused_services", "benign_infra", "network_apis",
+                                                      "domain_ages")} if na.get("ok") else {},
         "low_level_snippets": low_level_snippets,
     }
     if preflight.get("upx_packed"):

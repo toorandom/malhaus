@@ -113,6 +113,8 @@ def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
         return "pe"
     if "elf" in s or magic[:4] == b"\x7fELF":
         return "elf"
+    if ext in (".eml", ".msg") or "outlook message" in s or "rfc 822 mail" in s or "smtp mail" in s:
+        return "email"
     if "microsoft word" in s or "microsoft excel" in s or "microsoft powerpoint" in s or "ole 2" in s or "compound document" in s:
         return "office"
     if "zip" in s and ext in [".docx", ".xlsx", ".pptx"]:
@@ -356,6 +358,439 @@ def sha256(path: str) -> Dict[str, Any]:
 @tool
 def strings_ascii(path: str) -> Dict[str, Any]:
     return run_jailed(["strings", "-a", "-n", "6", path], path, timeout=40, max_bytes=650000)
+
+def _network_import_names(path: str) -> List[str]:
+    """Imported symbol names (PE via pefile, ELF via objdump -T) for network-capability matching."""
+    names: List[str] = []
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+        if magic[:2] == b"MZ":
+            pe = pefile.PE(path, fast_load=True)
+            pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+            for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []) or []:
+                for imp in entry.imports:
+                    if imp.name:
+                        names.append(imp.name.decode(errors="ignore"))
+            pe.close()
+        elif magic == b"\x7fELF":
+            out = run_jailed(["objdump", "-T", path], path, timeout=30, max_bytes=400000).get("stdout", "")
+            names = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]{2,})(?:@\S+)?\s*$", out, re.M)
+    except Exception:
+        pass
+    return names
+
+def network_artifacts_scan(path: str, extra_sources: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Implementation behind the network_artifacts tool; preflight passes decoded text
+    (FLOSS, macros, scripts, PDF/LNK analysis) as extra_sources."""
+    from agent.network_iocs import extract_network_artifacts, lookup_domain_ages, summarize
+    import config as _cfg
+
+    sources = {
+        "strings_ascii": run_jailed(["strings", "-a", "-n", "6", path], path,
+                                    timeout=60, max_bytes=4000000).get("stdout", ""),
+        "strings_utf16le": run_jailed(["strings", "-a", "-el", "-n", "6", path], path,
+                                      timeout=60, max_bytes=2000000).get("stdout", ""),
+    }
+    for k, v in (extra_sources or {}).items():
+        if v:
+            sources[k] = v
+    na = extract_network_artifacts(sources, _network_import_names(path))
+
+    na["domain_ages"] = []
+    if _cfg.DOMAIN_AGE_LOOKUP and na["domains"]:
+        # URL hosts first — they are the most likely live endpoints
+        # URL hosts first — they are the most likely live endpoints. Shared-hosting/abused
+        # services are skipped: their age is the platform's, not the actor's.
+        lookup = [i for i in na["items"] if i["type"] == "domain" and i["class"] == "unknown"]
+        url_hosts = [i["value"] for i in lookup if any(i["value"] in u for u in na["urls"])]
+        ordered = url_hosts + [i["value"] for i in lookup if i["value"] not in url_hosts]
+        na["domain_ages"] = lookup_domain_ages(ordered, max_domains=_cfg.DOMAIN_AGE_MAX_DOMAINS,
+                                               timeout=_cfg.DOMAIN_AGE_TIMEOUT)
+        na["summary"] = summarize(na)
+
+    lines = [na["summary"], ""]
+    for it in na["items"]:
+        lines.append(f"[{it['type']:<6}] {it['value']}  class={it['class']}  via={','.join(it['sources'])}")
+        lines.append(f"         context: {it['context'][:160]}")
+    for a in na["domain_ages"]:
+        age = f"{a['age_days']} days old (registered {a['created']})" if a.get("age_days") is not None \
+            else a.get("status") or a.get("error") or "registration date unknown"
+        lines.append(f"[age   ] {a['domain']}: {age}  ({a.get('source', '')})")
+    if na["network_apis"]:
+        lines.append("")
+        for cap, apis in na["network_apis"].items():
+            lines.append(f"[api   ] {cap}: {', '.join(apis)}")
+    na["ok"] = True
+    na["stdout"] = "\n".join(lines)
+    return na
+
+@tool
+def network_artifacts(path: str) -> Dict[str, Any]:
+    """Static network IOC extraction (never executes the sample): scans full ASCII and UTF-16LE
+    strings for URLs, domains, IPv4 and e-mails, rejects code identifiers like System.SysUtils or
+    kernel32.dll, flags PKI/vendor hosts as benign infrastructure and known paste/tunnel/dyndns hosts
+    as abused services, lists network-capable imports (wininet, winhttp, ws2_32, URLDownloadToFile...)
+    and looks up the registration age of the domains found (RDAP/whois). Use it on extracted inner
+    files (pass "path") to find C2 endpoints the container hides."""
+    return network_artifacts_scan(path)
+
+# ---------------- INSTALLERS (Inno Setup / NSIS) ----------------
+
+# innoextract 1.9 (latest release, also what apt ships) understands setup data up to 6.0.5
+INNOEXTRACT_MAX_VERSION = (6, 0, 5)
+
+def detect_installer(path: str) -> Dict[str, Any]:
+    """Cheap signature check: Inno Setup (setup data header) or NSIS (Nullsoft first-header magic)."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return {}
+    m = re.search(rb"Inno Setup Setup Data \((\d+)\.(\d+)\.(\d+)\)", data)
+    if m:
+        return {"type": "inno", "version": ".".join(x.decode() for x in m.groups()),
+                "version_tuple": tuple(int(x) for x in m.groups())}
+    if b"\xef\xbe\xad\xdeNullsoftInst" in data or b"\xef\xbe\xad\xdeNullSoftInst" in data:
+        return {"type": "nsis", "version": ""}
+    return {}
+
+def _innoextract_bin() -> Optional[str]:
+    local = TOOLS_DIR / "innoextract"
+    return which("innoextract") or (str(local) if local.exists() else None)
+
+@tool
+def installer_extract(path: str) -> Dict[str, Any]:
+    """Statically unpack an Inno Setup (innoextract) or NSIS (7z, includes the [NSIS].nsi install script)
+    installer and inventory the bundled files (type, size, sha256, entropy). Installers hide the real payload
+    in compressed data — use the listed paths with other tools ("path") to analyse what would be installed."""
+    det = detect_installer(path)
+    if not det:
+        return {"ok": False, "stdout": "", "error": "not an Inno Setup or NSIS installer"}
+    outdir = _work_dir(path, det["type"])
+    res: Dict[str, Any] = {"ok": False, "installer": det["type"], "version": det.get("version", ""),
+                           "extract_dir": str(outdir), "files": []}
+    if det["type"] == "inno":
+        ie = _innoextract_bin()
+        if det["version_tuple"] > INNOEXTRACT_MAX_VERSION:
+            res["error"] = (f"Inno Setup {det['version']} is newer than innoextract supports "
+                            f"(<= {'.'.join(map(str, INNOEXTRACT_MAX_VERSION))}); payload not unpacked")
+        elif not ie:
+            res["error"] = "innoextract not installed (apt install innoextract)"
+        else:
+            r = run_jailed([ie, "-e", "-q", "-d", str(outdir), path], path, timeout=180, max_bytes=200000)
+            res["tool_output"] = (r.get("stdout", "") + r.get("stderr", ""))[-3000:]
+            if not r.get("ok"):
+                res["error"] = "innoextract failed: " + (r.get("stderr", "") or "")[-500:]
+    else:
+        r = run_jailed(["7z", "x", "-y", "-bd", f"-o{outdir}", path], path, timeout=180, max_bytes=200000)
+        res["tool_output"] = (r.get("stdout", "") + r.get("stderr", ""))[-3000:]
+        if not r.get("ok"):
+            res["error"] = "7z NSIS extraction failed: " + (r.get("stderr", "") or "")[-500:]
+
+    files = [f for f in sorted(outdir.rglob("*")) if f.is_file()][:300]
+    for f in files:
+        size = f.stat().st_size
+        data = f.read_bytes() if size <= 20_000_000 else b""
+        res["files"].append({
+            "path": str(f), "name": str(f.relative_to(outdir)), "size": size,
+            "kind": guess_kind_from_fileinfo(file_info(str(f)).get("stdout", ""), str(f)),
+            "sha256": _sha256_bytes(data) if data else "", "entropy": round(_shannon_entropy(data), 3) if data else None,
+        })
+    res["ok"] = bool(res["files"])
+    pes = [f for f in res["files"] if f["kind"] == "pe"]
+    if pes:
+        res["largest_pe"] = max(pes, key=lambda f: f["size"])["path"]
+    nsi = next((f for f in files if f.suffix.lower() == ".nsi"), None)
+    if nsi:
+        res["install_script"] = nsi.read_text(errors="replace")[:40000]
+
+    lines = [f"{det['type']} installer {det.get('version', '')}".strip() + f" — {len(res['files'])} file(s) extracted to {outdir}"]
+    if res.get("error"):
+        lines.append(f"! {res['error']}")
+    for f in res["files"][:120]:
+        lines.append(f"  {f['kind']:<14} {f['size']:>10}  H={f['entropy']}  {f['name']}  path={f['path']}")
+    if res.get("install_script"):
+        lines += ["", "=== install script ([NSIS].nsi) ===", res["install_script"][:8000]]
+    res["stdout"] = "\n".join(lines)
+    return res
+
+# ---------------- DOCUMENT / E-MAIL CONTENT (phishing) ----------------
+
+def _work_dir(path: str, tag: str) -> Path:
+    d = EXTRACT_DIR / f"{tag}_{_sha256_file(Path(path))[:16]}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _ocr_pages(path: str, outdir: Path, pages: str = "1-3") -> Dict[str, Any]:
+    """Render PDF pages to PNG (mutool) and OCR them with tesseract when installed;
+    otherwise return the images so the vision LLM can transcribe them."""
+    res: Dict[str, Any] = {"page_images_b64": [], "text": "", "method": ""}
+    if not which("mutool"):
+        return res
+    run_jailed(["mutool", "draw", "-q", "-r", "110", "-o", str(outdir / "page%d.png"), path, pages],
+               path, timeout=90, max_bytes=20000)
+    imgs = sorted(outdir.glob("page*.png"))[:3]
+    if which("tesseract"):
+        texts = [run(["tesseract", str(p), "stdout"], timeout=90, max_bytes=200000).get("stdout", "") for p in imgs]
+        if "".join(texts).strip():
+            res["text"], res["method"] = "\n\f".join(texts), "tesseract"
+            return res
+    res["page_images_b64"] = [base64.b64encode(p.read_bytes()).decode() for p in imgs if p.stat().st_size < 4_000_000]
+    return res
+
+def _pdf_content(path: str) -> Dict[str, Any]:
+    doc: Dict[str, Any] = {"format": "pdf", "text": "", "links": [], "text_method": "none"}
+    outdir = _work_dir(path, "pdfdoc")
+    if which("mutool"):
+        doc["text"] = run_jailed(["mutool", "draw", "-q", "-F", "txt", "-o", "-", path], path,
+                                 timeout=90, max_bytes=400000).get("stdout", "")
+        doc["text_method"] = "text_layer"
+        clean = outdir / "decompressed.pdf"
+        run_jailed(["mutool", "clean", "-d", path, str(clean)], path, timeout=90, max_bytes=20000)
+        raw = clean.read_bytes() if clean.exists() else Path(path).read_bytes()
+    else:
+        raw = Path(path).read_bytes()
+    for m in re.finditer(rb"/URI\s*\(((?:\\.|[^\\)])*)\)", raw):
+        doc["links"].append({"href": m.group(1).decode("latin-1").replace("\\/", "/"), "text": ""})
+    for m in re.finditer(rb"/URI\s*<([0-9A-Fa-f\s]+)>", raw):
+        try:
+            doc["links"].append({"href": bytes.fromhex(m.group(1).decode().replace(" ", "")).decode("latin-1"), "text": ""})
+        except ValueError:
+            pass
+    # AcroForm text field with the password flag (Ff bit 14 = 8192)
+    doc["forms"] = [{"action": "", "password": True}] if re.search(rb"/FT\s*/Tx[^>]*/Ff\s+8192", raw) else []
+    has_images = re.search(rb"/Subtype\s*/Image", raw) is not None
+    if len(re.sub(r"\s+", "", doc["text"])) < 200 and has_images:
+        ocr = _ocr_pages(path, outdir)
+        if ocr["text"]:
+            doc["text"], doc["text_method"] = ocr["text"], ocr["method"]
+        else:
+            doc["needs_ocr"] = True
+            doc["page_images_b64"] = ocr["page_images_b64"]
+    return doc
+
+def _openxml_content(path: str) -> Dict[str, Any]:
+    import zipfile
+    import html as _html
+    doc: Dict[str, Any] = {"format": "openxml", "text": "", "links": [], "text_method": "xml"}
+    parts: List[str] = []
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+
+        def _read(n: str) -> str:
+            return z.read(n).decode("utf-8", "replace") if z.getinfo(n).file_size < 20_000_000 else ""
+
+        rels: Dict[str, Dict[str, str]] = {}
+        for n in names:
+            if n.endswith(".rels"):
+                for m in re.finditer(r"<Relationship\b([^>]*)/?>", _read(n)):
+                    a = dict(re.findall(r'(\w+)="([^"]*)"', m.group(1)))
+                    if a.get("TargetMode") == "External":
+                        rels[a.get("Id", "")] = a
+                        if a.get("Type", "").endswith(("/attachedTemplate", "/oleObject")):
+                            doc.setdefault("remote_templates", []).append(a.get("Target", ""))
+        text_parts = [n for n in names if re.match(
+            r"(word/(document|header\d*|footer\d*|footnotes|comments)|ppt/slides/slide\d+|xl/sharedStrings)\.xml$", n)]
+        for n in text_parts:
+            xml = _read(n)
+            # hyperlink visible text -> target (rels Id lookup)
+            for hm in re.finditer(r'<w:hyperlink\b[^>]*r:id="([^"]+)"[^>]*>(.*?)</w:hyperlink>', xml, re.S):
+                tgt = rels.get(hm.group(1), {}).get("Target")
+                if tgt:
+                    doc["links"].append({"href": tgt, "text": "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", hm.group(2)))})
+            xml = re.sub(r"</w:p>|</a:p>|</si>", "\n", xml)
+            parts.append(re.sub(r"<[^>]+>", "", xml))
+        linked = {l["href"] for l in doc["links"]}
+        for a in rels.values():
+            t = a.get("Target", "")
+            if t and t not in linked and not t.startswith("mailto:"):
+                doc["links"].append({"href": t, "text": ""})
+    doc["text"] = _html.unescape(re.sub(r"\n\s*\n+", "\n\n", "\n".join(parts))).strip()
+    return doc
+
+def _msg_props(ole, prefix: str = "") -> Dict[str, Any]:
+    """MAPI string/binary properties (__substg1.0_PPPPTTTT) of an Outlook .msg storage."""
+    props: Dict[str, Any] = {}
+    for entry in ole.listdir(streams=True, storages=False):
+        if (prefix and (len(entry) != 2 or entry[0] != prefix)) or (not prefix and len(entry) != 1):
+            continue
+        name = entry[-1]
+        if not name.startswith("__substg1.0_"):
+            continue
+        tag, typ = name[12:16].upper(), name[16:20].upper()
+        data = ole.openstream(entry).read()
+        if typ == "001F":
+            props[tag] = data.decode("utf-16-le", "replace").rstrip("\x00")
+        elif typ == "001E":
+            props[tag] = data.decode("latin-1", "replace").rstrip("\x00")
+        elif typ == "0102":
+            props[tag] = data
+    return props
+
+def _email_content(path: str) -> Dict[str, Any]:
+    from email import policy
+    from email.parser import BytesParser, HeaderParser
+    from email.utils import getaddresses, parseaddr
+    from agent.phishing import html_to_text_and_links
+    from agent.network_iocs import RE_URL
+
+    outdir = _work_dir(path, "email")
+    email_d: Dict[str, Any] = {"attachments": []}
+    text, html_body = "", ""
+    with open(path, "rb") as fh:
+        head = fh.read(8)
+    if head.startswith(b"\xd0\xcf\x11\xe0"):  # OLE -> Outlook .msg
+        import olefile
+        email_d["format"] = "msg"
+        ole = olefile.OleFileIO(path)
+        p = _msg_props(ole)
+        hdrs = HeaderParser().parsestr(p.get("007D", "") or "")  # PR_TRANSPORT_MESSAGE_HEADERS
+        email_d.update({
+            "subject": p.get("0037", ""), "from_name": p.get("0C1A", "") or p.get("0042", ""),
+            "from": p.get("5D01", "") or p.get("0C1F", "") or p.get("0065", ""),
+            "to": p.get("0E04", ""), "message_id": p.get("1035", ""),
+            "reply_to": parseaddr(hdrs.get("Reply-To", ""))[1], "return_path": hdrs.get("Return-Path", "").strip("<> "),
+            "date": hdrs.get("Date", ""), "authentication_results": " ".join(hdrs.get_all("Authentication-Results") or []),
+            "received_spf": hdrs.get("Received-SPF", ""), "x_originating_ip": hdrs.get("X-Originating-IP", ""),
+            "received": hdrs.get_all("Received") or [],
+        })
+        if "@" not in email_d["from"] and hdrs.get("From"):
+            email_d["from_name"], email_d["from"] = parseaddr(hdrs.get("From"))
+        text = p.get("1000", "") if isinstance(p.get("1000"), str) else ""
+        hb = p.get("1013", "")
+        html_body = hb.decode("utf-8", "replace") if isinstance(hb, bytes) else hb
+        for st in sorted({e[0] for e in ole.listdir(streams=True, storages=False) if e[0].startswith("__attach_version1.0_")}):
+            ap = _msg_props(ole, st)
+            name = ap.get("3707") or ap.get("3704") or st
+            data = ap.get("3701") if isinstance(ap.get("3701"), bytes) else b""
+            email_d["attachments"].append({"name": name, "data": data})
+        ole.close()
+    else:
+        email_d["format"] = "eml"
+        with open(path, "rb") as fh:
+            msg = BytesParser(policy=policy.default).parse(fh)
+        from_name, from_addr = parseaddr(str(msg.get("From", "")))
+        email_d.update({
+            "subject": str(msg.get("Subject", "")), "from_name": from_name, "from": from_addr,
+            "to": ", ".join(a for _, a in getaddresses([str(x) for x in msg.get_all("To") or []])),
+            "reply_to": parseaddr(str(msg.get("Reply-To", "")))[1], "return_path": str(msg.get("Return-Path", "")).strip("<> "),
+            "date": str(msg.get("Date", "")), "message_id": str(msg.get("Message-ID", "")),
+            "authentication_results": " ".join(str(x) for x in msg.get_all("Authentication-Results") or []),
+            "received_spf": str(msg.get("Received-SPF", "")), "x_originating_ip": str(msg.get("X-Originating-IP", "")),
+            "received": [str(x) for x in msg.get_all("Received") or []],
+        })
+        email_d["dkim_domains"] = sorted(set(re.findall(
+            r"\bd=([A-Za-z0-9.-]+)", " ".join(str(x) for x in msg.get_all("DKIM-Signature") or []))))
+        for part in msg.walk():
+            if part.is_multipart():
+                continue
+            ctype = part.get_content_type()
+            fname = part.get_filename()
+            if fname or part.get_content_disposition() == "attachment":
+                email_d["attachments"].append({"name": fname or "unnamed", "data": part.get_payload(decode=True) or b""})
+            elif ctype == "text/plain" and not text:
+                text = part.get_content()
+            elif ctype == "text/html" and not html_body:
+                html_body = part.get_content()
+
+    links: List[Dict[str, str]] = []
+    forms: List[Dict[str, Any]] = []
+    if html_body:
+        html_text, links, forms = html_to_text_and_links(html_body)
+        text = text or html_text
+    linked = {l["href"] for l in links}
+    links += [{"href": u, "text": ""} for u in RE_URL.findall(text or "") if u not in linked]
+
+    # Save attachments so other tools (and the LLM via "path") can analyse them
+    saved = []
+    for a in email_d.pop("attachments"):
+        data = a.pop("data") or b""
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", Path(str(a["name"])).name)[:120] or "attachment"
+        dest = outdir / safe
+        dest.write_bytes(data)
+        saved.append({"name": a["name"], "size": len(data), "sha256": _sha256_bytes(data), "path": str(dest)})
+        if safe.lower().endswith((".html", ".htm", ".svg")):
+            _, att_links, att_forms = html_to_text_and_links(data.decode("utf-8", "replace"))
+            links += att_links
+            forms += att_forms
+    email_d["attachments"] = saved
+    email_d["body_html"] = html_body[:200000]
+    return {"format": email_d["format"], "text": (text or "")[:100000], "links": links, "forms": forms,
+            "text_method": "email_body", "email": email_d}
+
+def document_content_scan(path: str) -> Dict[str, Any]:
+    """Text, links and (for e-mail) sender/attachments of a PDF, OOXML document, .eml or .msg."""
+    with open(path, "rb") as fh:
+        head = fh.read(8)
+    ext = Path(path).suffix.lower()
+    try:
+        if head.startswith(b"%PDF") or ext == ".pdf":
+            return _pdf_content(path)
+        if head.startswith(b"PK"):
+            return _openxml_content(path)
+        if ext in (".eml", ".msg") or head.startswith(b"\xd0\xcf\x11\xe0") or re.match(rb"^[A-Za-z-]+:", head):
+            return _email_content(path)
+    except Exception as e:
+        return {"format": ext.lstrip(".") or "unknown", "text": "", "links": [], "error": f"{type(e).__name__}: {e}"}
+    return {"format": "unknown", "text": "", "links": [], "error": "unsupported format for content scan"}
+
+def _fmt_email(e: Dict[str, Any]) -> List[str]:
+    lines = []
+    for k in ("from_name", "from", "reply_to", "return_path", "to", "subject", "date", "message_id",
+              "x_originating_ip", "authentication_results", "received_spf"):
+        if e.get(k):
+            lines.append(f"{k:<22} {str(e[k])[:300]}")
+    for a in e.get("attachments") or []:
+        lines.append(f"attachment             {a['name']}  ({a['size']} bytes, sha256 {a['sha256'][:16]}…)  path={a['path']}")
+    return lines
+
+@tool
+def email_parse(path: str) -> Dict[str, Any]:
+    """Parse an .eml or Outlook .msg e-mail: sender (From/display name/Reply-To/Return-Path), SPF/DKIM/DMARC
+    results, Received chain, subject, decoded body text, links (visible text vs real href) and attachments.
+    Attachments are saved to disk and their paths listed — run other tools on them with "path"."""
+    doc = _email_content(path)
+    e = doc.get("email") or {}
+    lines = _fmt_email(e)
+    lines += ["", f"links ({len(doc['links'])}):"] + [f"  {l['href'][:200]}  text='{l['text'][:80]}'" for l in doc["links"][:60]]
+    lines += ["", "body:", (doc.get("text") or "")[:6000]]
+    return {"ok": True, "stdout": "\n".join(lines), "email": {k: v for k, v in e.items() if k != "body_html"},
+            "links": doc["links"], "attachments": e.get("attachments", []), "text": doc.get("text", "")}
+
+def phishing_analysis_scan(path: str, progress_cb=None, use_llm: bool = True) -> Dict[str, Any]:
+    from agent.phishing import analyze_phishing
+    doc = document_content_scan(path)
+    res = analyze_phishing(doc, progress_cb=progress_cb, use_llm=use_llm)
+    if doc.get("error"):
+        res["notes"].append(f"content extraction: {doc['error']}")
+    res["document_text"] = (doc.get("text") or "")[:20000]
+    lines = [res["summary"], ""]
+    if res.get("email"):
+        lines += _fmt_email(res["email"]) + [""]
+    lines.append(f"text: {res['text_chars']} chars via {res.get('text_method')}")
+    for s in res["signals"]:
+        lines.append(f"[+{s['weight']:>2}] {s['signal']}")
+    for l in res["links"][:60]:
+        lines.append(f"[link] {l['href'][:160]}" + (f"  text='{l['text'][:60]}'" if l["text"] else "") +
+                     (f"  ! {'; '.join(l['flags'])}" if l["flags"] else ""))
+    for a in res["domain_ages"]:
+        lines.append(f"[age ] {a['domain']}: " + (f"{a['age_days']} days (registered {a['created']})"
+                                                if a.get("age_days") is not None else (a.get("status") or a.get("error") or "unknown")))
+    if res["llm"]:
+        lines.append(f"[llm ] {json.dumps(res['llm'], ensure_ascii=False)[:1500]}")
+    for n in res["notes"]:
+        lines.append(f"[note] {n}")
+    res["stdout"] = "\n".join(lines)
+    return res
+
+@tool
+def phishing_analysis(path: str) -> Dict[str, Any]:
+    """Phishing / social-engineering analysis of a PDF, DOCX/XLSX/PPTX, .eml or .msg: extracts the text
+    (OCR or vision-LLM transcription for image-only PDFs), links with visible-text vs real-target mismatch,
+    sender spoofing (display name, Reply-To/Return-Path, SPF/DKIM/DMARC), lookalike/brand-impersonating and
+    newly registered domains (RDAP/whois age), risky attachments, credential forms and lure wording, then asks
+    the LLM to judge the text. Use it on attachments or embedded documents via "path"."""
+    return phishing_analysis_scan(path)
 
 @tool
 def ssdeep_hash(path: str) -> Dict[str, Any]:
@@ -1362,6 +1797,7 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
         ".doc": "office", ".xls": "office", ".ppt": "office", ".rtf": "office",
         ".docm": "office", ".xlsm": "office", ".pptm": "office",
         ".docx": "office_openxml", ".xlsx": "office_openxml", ".pptx": "office_openxml",
+        ".eml": "email", ".msg": "email",
         ".jsp": "shell", ".jspx": "shell", ".asp": "shell", ".aspx": "shell", ".php": "shell",
         ".txt": "shell",
     }
@@ -1847,7 +2283,13 @@ def jar_extract_inner(path: str) -> Dict[str, Any]:
 
 ALL_TOOLS = [
     # universal
-    file_info, sha256, ssdeep_hash, entropy_shannon, strings_ascii, extract_payloads, authenticode_verify,
+    file_info, sha256, ssdeep_hash, entropy_shannon, strings_ascii, network_artifacts, extract_payloads, authenticode_verify,
+
+    # documents / e-mail (phishing)
+    email_parse, phishing_analysis,
+
+    # installers
+    installer_extract,
 
     # PE low-level
     upx_unpack, readpe_all, pesec, objdump_pe_headers, objdump_pe_imports_dynamic,

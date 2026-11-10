@@ -231,23 +231,67 @@ def heuristic_score_from_evidence(ev: Dict[str, Any], strings_llm: Dict[str, Any
                             f"Authenticode signer ('{cert_company}')."
                         )
 
-    # IOC counts from deterministic extraction (domains, IPs, URLs)
+    # Network artifacts (whole-file, validated; benign PKI/vendor hosts already excluded)
+    na = ev.get("network_artifacts") or {}
     iocs_det = ev.get("iocs_deterministic") or {}
-    n_domains = len(iocs_det.get("domains") or [])
-    n_ips = len(iocs_det.get("ips") or [])
-    n_urls = len(iocs_det.get("urls") or [])
-    if n_urls >= 3:
-        score += 8; reasons.append(f"Multiple embedded URLs found ({n_urls}).")
-    elif n_urls >= 1:
-        score += 4; reasons.append(f"Embedded URL(s) found ({n_urls}).")
-    if n_ips >= 3:
-        score += 8; reasons.append(f"Multiple embedded IP addresses found ({n_ips}).")
-    elif n_ips == 1 or n_ips == 2:
-        score += 4; reasons.append(f"Embedded IP address(es) found ({n_ips}).")
-    if n_domains >= 5:
-        score += 6; reasons.append(f"High number of embedded domain strings ({n_domains}).")
-    elif n_domains >= 2:
-        score += 3; reasons.append(f"Embedded domain strings found ({n_domains}).")
+    if na or iocs_det:
+        def _ex(v):
+            return ", ".join(v[:3]) + (f" (+{len(v) - 3} more)" if len(v) > 3 else "")
+        abused = set(na.get("abused_services") or [])
+        urls = [u for u in (na.get("urls") if na else iocs_det.get("urls")) or [] if u not in abused]
+        domains = [d for d in (na.get("domains") if na else iocs_det.get("domains")) or [] if d not in abused]
+        ips = (na.get("ips") if na else iocs_det.get("ips")) or []
+        net_score = 0
+        if len(urls) >= 3:
+            net_score += 10; reasons.append(f"Multiple embedded URLs ({len(urls)}): {_ex(urls)}.")
+        elif urls:
+            net_score += 6; reasons.append(f"Embedded URL(s): {_ex(urls)}.")
+        if len(ips) >= 3:
+            net_score += 10; reasons.append(f"Multiple hardcoded IP addresses ({len(ips)}): {_ex(ips)}.")
+        elif ips:
+            net_score += 6; reasons.append(f"Hardcoded IP address(es): {_ex(ips)}.")
+        if any(":" in ip for ip in ips):
+            net_score += 2
+        if len(domains) >= 5:
+            net_score += 6; reasons.append(f"Many embedded domains ({len(domains)}): {_ex(domains)}.")
+        elif len(domains) >= 2:
+            net_score += 4; reasons.append(f"Embedded domains: {_ex(domains)}.")
+        elif domains:
+            net_score += 2; reasons.append(f"Embedded domain: {domains[0]}.")
+        if abused:
+            net_score += 12; reasons.append(f"References commonly-abused hosting/paste/tunnel services: {_ex(sorted(abused))}.")
+        for a in na.get("domain_ages") or []:
+            age = a.get("age_days")
+            if age is not None and age < 30:
+                net_score += 20; reasons.append(f"Newly registered domain {a['domain']} ({age} days old, created {a['created']}).")
+            elif age is not None and age < 180:
+                net_score += 10; reasons.append(f"Recently registered domain {a['domain']} ({age} days old).")
+            elif a.get("status") == "not_registered":
+                net_score += 8; reasons.append(f"Embedded domain {a['domain']} is not registered (DGA, dead or future C2).")
+        apis = na.get("network_apis") or {}
+        if apis.get("download_to_file"):
+            net_score += 10; reasons.append(f"Download-to-file API imported: {', '.join(apis['download_to_file'])}.")
+        if (urls or ips or domains or abused) and (apis.get("http_client") or apis.get("raw_sockets") or apis.get("ftp")):
+            caps = [c for c in ("http_client", "raw_sockets", "ftp") if apis.get(c)]
+            net_score += 6; reasons.append(f"Network-capable imports ({', '.join(caps)}) alongside hardcoded endpoints.")
+        if apis.get("network_recon"):
+            net_score += 4; reasons.append(f"Network reconnaissance APIs: {', '.join(apis['network_recon'][:4])}.")
+        score += min(net_score, 40)
+
+    # Installer whose bundled payload could not be unpacked: say so (no score — installers are not malicious per se)
+    inst = ev.get("installer") or {}
+    if inst and not inst.get("ok"):
+        reasons.append(f"{inst.get('installer', '').upper()} installer {inst.get('version') or ''}".strip()
+                       + f": bundled payload not inspected statically ({inst.get('error') or 'extraction failed'}).")
+
+    # Phishing / social-engineering content (documents and e-mails)
+    ph = ev.get("phishing") or {}
+    if ph.get("score"):
+        ph_score = int(ph["score"])
+        score += min(45, round(ph_score * 0.45))
+        top = [sg["signal"] for sg in (ph.get("signals") or [])[:3]]
+        reasons.append(f"Phishing analysis score {ph_score}/100 ({ph.get('verdict', '').replace('_', ' ')})"
+                       + (": " + "; ".join(top) if top else "") + ".")
 
     # .NET capability signals from dnfile analysis
     dotnet = ev.get("dotnet_capabilities") or {}

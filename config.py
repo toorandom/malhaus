@@ -34,6 +34,12 @@ CAPTCHA_ENABLED = os.environ.get("MALHAUS_CAPTCHA_ENABLED", "1") == "1"
 # for service principal auth, or leave unset for Managed Identity on Azure VMs.
 AZURE_USE_ENTRA_ID = os.environ.get("MALHAUS_AZURE_USE_ENTRA_ID", "0") == "1"
 
+# Domain-age lookup (RDAP, falls back to whois CLI) for domains found statically in a sample.
+# Only domain names leave the server — never the sample. Set MALHAUS_DOMAIN_AGE_LOOKUP=0 for air-gapped hosts.
+DOMAIN_AGE_LOOKUP = os.environ.get("MALHAUS_DOMAIN_AGE_LOOKUP", "1") == "1"
+DOMAIN_AGE_MAX_DOMAINS = int(os.environ.get("MALHAUS_DOMAIN_AGE_MAX_DOMAINS", "5"))
+DOMAIN_AGE_TIMEOUT = int(os.environ.get("MALHAUS_DOMAIN_AGE_TIMEOUT", "6"))   # seconds per lookup
+
 
 # NOTE:
 # - Webapp uses MAX_UPLOAD_* and MAX_PER_HOUR_PER_IP now.

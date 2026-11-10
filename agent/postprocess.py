@@ -98,7 +98,11 @@ def enforce_verdict(
         iocs[k] = merge_lists(iocs.get(k, []), iocs_str.get(k, []), iocs_det.get(k, []))
 
     iocs["file_paths"] = _clean_file_paths(iocs.get("file_paths", []))
+    # LLM/strings-LLM domains get the same validation as deterministic ones (drops System.SysUtils etc.)
+    from agent.network_iocs import is_plausible_domain
+    iocs["domains"] = [d for d in iocs.get("domains", []) if isinstance(d, str) and is_plausible_domain(d.lower())]
     verdict["iocs"] = iocs
+    verdict["network_artifacts"] = evidence_pack.get("network_artifacts") or {}
 
     # suspicious strings
     if not _nonempty_list(verdict.get("suspicious_strings", [])):
@@ -157,6 +161,26 @@ def enforce_verdict(
 
     # --- Top reasons: append heuristics & strings summary (without changing risk unless needed) ---
     reasons: List[str] = verdict.get("top_reasons") if isinstance(verdict.get("top_reasons"), list) else []
+
+    # Phishing verdict for documents / e-mails — its own reason, and it may raise the risk level
+    ph = evidence_pack.get("phishing") or {}
+    verdict["phishing"] = ph
+    if ph.get("summary"):
+        if ph.get("score", 0) >= 35:
+            reasons.insert(0, ph["summary"])
+        else:
+            reasons.append(ph["summary"])
+        order = ["benign", "unknown", "suspicious", "likely_malware", "malware"]
+        floor = "likely_malware" if ph.get("score", 0) >= 85 else ("suspicious" if ph.get("score", 0) >= 35 else None)
+        cur = verdict.get("risk_level", "unknown")
+        if floor and cur in order and order.index(cur) < order.index(floor):
+            verdict["risk_level"] = floor
+            reasons.insert(0, f"Escalated to {floor}: phishing score {ph['score']}/100.")
+
+    # Network artifacts always get their own reason, naming the values (or saying none were found)
+    na_summary = (verdict.get("network_artifacts") or {}).get("summary")
+    if na_summary:
+        reasons.append(na_summary)
 
     # Attach heuristics summary for transparency
     hr = heuristics.get("reasons")

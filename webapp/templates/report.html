@@ -129,6 +129,171 @@
       {% endif %}
     </section>
 
+    <style>
+        .netart{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+        .netart th{text-align:left;font-size:11px;color:var(--muted);font-weight:500;padding:0 8px 6px 0}
+        .netart td{padding:6px 8px 6px 0;border-top:1px solid rgba(255,255,255,.08);vertical-align:top}
+        .netart .val{word-break:break-all}
+        .netcls{font-size:10px;padding:1px 6px;border-radius:8px;border:1px solid rgba(255,255,255,.2);white-space:nowrap}
+        .netcls.unknown,.netcls.public{border-color:#f0c64a;color:#f0c64a}
+        .netcls.abused_service,.netcls.new{border-color:var(--red);color:var(--red)}
+        .netcls.benign_infra,.netcls.private,.netcls.loopback,.netcls.reserved,.netcls.old{color:var(--muted)}
+    </style>
+    {% set ph = p.get('mandatory_phishing_analysis') or {} %}
+    {% if ph.get('ok') %}
+    {% set phv = ph.get('verdict', '') %}
+    <section class="card">
+      <div class="row">
+        <h2>Phishing analysis</h2>
+        <div class="row-right">
+          <span class="badge big {{ 'likely_malware' if phv == 'phishing' else ('suspicious' if phv == 'suspicious' else 'benign') }}">{{ phv|replace('_', ' ') }}</span>
+          <span class="pill big">score <span class="mono">{{ ph.get('score', 0) }}</span></span>
+        </div>
+      </div>
+      <div class="muted mono" style="font-size:11px;">
+        {{ ph.get('format') }} · text {{ ph.get('text_chars', 0) }} chars via {{ ph.get('text_method') or 'n/a' }}
+        · deterministic {{ ph.get('deterministic_score', 0) }}{% if ph.get('llm_score') is not none %} · LLM {{ ph.get('llm_score') }}{% endif %}
+      </div>
+      {% set llm = ph.get('llm') or {} %}
+      {% if llm.get('summary') %}
+        <div style="font-size:13px;line-height:1.5;margin-top:8px;">
+          {{ llm.get('summary') }}
+          {% if llm.get('impersonated_brand') %}<span class="pill mono" style="font-size:11px;">impersonates: {{ llm.get('impersonated_brand') }}</span>{% endif %}
+          {% for t in llm.get('tactics') or [] %}<span class="pill mono" style="font-size:11px;">{{ t }}</span>{% endfor %}
+        </div>
+      {% endif %}
+
+      {% set em = ph.get('email') or {} %}
+      {% if em %}
+      <h3>Sender</h3>
+      <div class="codebox"><pre class="mono break">{% for k in ['from_name', 'from', 'reply_to', 'return_path', 'to', 'subject', 'date', 'x_originating_ip', 'authentication_results', 'received_spf'] %}{% if em.get(k) %}{{ '%-22s'|format(k) }} {{ em.get(k) }}
+{% endif %}{% endfor %}</pre></div>
+      {% endif %}
+
+      {% if ph.get('signals') %}
+      <h3>Signals</h3>
+      <ul class="list">
+        {% for sg in ph.get('signals') %}<li><span class="mono muted">+{{ sg.weight }}</span> {{ sg.signal }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if ph.get('links') %}
+      <h3>Links</h3>
+      <div style="overflow-x:auto;">
+        <table class="netart">
+          <tr><th>target</th><th>visible text</th><th>flags</th></tr>
+          {% for l in ph.get('links') %}
+          <tr>
+            <td class="mono val">{{ l.href }}</td>
+            <td class="mono muted val">{{ l.text }}</td>
+            <td>{% for f in l.flags %}<span class="netcls new">{{ f }}</span> {% endfor %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+
+      {% if ph.get('domain_ages') %}
+      <h3>Domain age</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;">
+        {% for a in ph.get('domain_ages') %}
+          {% set age = a.get('age_days') %}
+          <span class="netcls {{ 'new' if (age is not none and age < 30) or a.get('status') == 'not_registered' else ('unknown' if age is not none and age < 180 else 'old') }} mono" style="font-size:11px;padding:3px 8px;">
+            {{ a.domain }}: {% if age is not none %}{{ age }} days ({{ a.created }}){% elif a.get('status') %}{{ a.status|replace('_', ' ') }}{% else %}unknown{% endif %}
+          </span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if em.get('attachments') %}
+      <h3>Attachments</h3>
+      <div class="codebox"><pre class="mono break">{% for a in em.get('attachments') %}{{ a.name }}  ({{ a.size }} bytes)  sha256 {{ a.sha256 }}
+{% endfor %}</pre></div>
+      {% endif %}
+
+      {% for n in ph.get('notes') or [] %}<div class="muted" style="font-size:12px;margin-top:6px;">⚠ {{ n }}</div>{% endfor %}
+      {% if ph.get('document_text') %}
+      <details style="margin-top:10px;">
+        <summary class="mono muted">Extracted text ({{ ph.get('text_method') }})</summary>
+        <div class="codebox"><pre class="mono break">{{ ph.get('document_text')[:8000] }}</pre></div>
+      </details>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% set na = p.get('mandatory_network_artifacts') or {} %}
+    {% if na.get('ok') %}
+    <section class="card">
+      <div class="row">
+        <h2>Network artifacts</h2>
+        <div class="muted mono" style="font-size:11px;">static · {{ (na.get('sources_scanned') or [])|join(', ') }}</div>
+      </div>
+      <div style="font-size:13px;line-height:1.5;margin-top:4px;">{{ na.get('summary', '') }}</div>
+
+      {% set actionable = (na.get('items') or [])|rejectattr('class', 'in', ['benign_infra', 'loopback', 'reserved'])|list %}
+      {% set benign = (na.get('items') or [])|selectattr('class', 'in', ['benign_infra', 'loopback', 'reserved'])|list %}
+      {% if actionable %}
+      <div style="overflow-x:auto;">
+        <table class="netart">
+          <tr><th>type</th><th>value</th><th>class</th><th>found in</th><th>context</th></tr>
+          {% for it in actionable %}
+          <tr>
+            <td class="mono">{{ it.type }}</td>
+            <td class="mono val">{{ it.value }}</td>
+            <td><span class="netcls {{ it['class'] }}">{{ it['class']|replace('_', ' ') }}</span></td>
+            <td class="mono muted">{{ it.sources|join(', ') }}</td>
+            <td class="mono muted val">{{ it.context[:120] }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+
+      {% if na.get('domain_ages') %}
+      <h3>Domain age</h3>
+      <div style="overflow-x:auto;">
+        <table class="netart">
+          <tr><th>domain</th><th>registered</th><th>age</th><th>via</th></tr>
+          {% for a in na.get('domain_ages') %}
+          {% set age = a.get('age_days') %}
+          <tr>
+            <td class="mono val">{{ a.domain }}{% if a.host and a.host != a.domain %} <span class="muted">({{ a.host }})</span>{% endif %}</td>
+            <td class="mono">{{ a.get('created') or '—' }}</td>
+            <td>
+              {% if age is not none %}
+                <span class="netcls {{ 'new' if age < 30 else ('unknown' if age < 180 else 'old') }}">{{ age }} days{% if age < 30 %} · newly registered{% endif %}</span>
+              {% elif a.get('status') == 'not_registered' %}
+                <span class="netcls new">not registered</span>
+              {% else %}
+                <span class="muted">{{ a.get('error') or 'unknown' }}</span>
+              {% endif %}
+            </td>
+            <td class="mono muted">{{ a.get('source', '') }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+
+      {% if na.get('network_apis') %}
+      <h3>Network-capable imports</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;">
+        {% for cap, apis in na.get('network_apis').items() %}
+          <span class="pill mono" style="font-size:11px;" title="{{ apis|join(', ') }}">{{ cap|replace('_', ' ') }}: {{ apis[:3]|join(', ') }}{% if apis|length > 3 %} +{{ apis|length - 3 }}{% endif %}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if benign %}
+      <details style="margin-top:10px;">
+        <summary class="mono muted">{{ benign|length }} benign infrastructure / non-routable entries (certificate CRL/OCSP, schemas, vendor sites)</summary>
+        <div class="codebox"><pre class="mono break">{% for it in benign %}[{{ it.type }}] {{ it.value }}  ({{ it['class'] }}, {{ it.sources|join(',') }})
+{% endfor %}</pre></div>
+      </details>
+      {% endif %}
+    </section>
+    {% endif %}
+
     <section class="card">
       <div class="row">
         <h2>Low-level static outputs</h2>
@@ -152,6 +317,12 @@
 	{% set bw = p.get("mandatory_binwalk") %}
 	{% if bw is not none %}
 		{{ show_block("binwalk (embedded file signatures)", bw) }}
+	{% endif %}
+
+	{# --- Inno Setup / NSIS installer contents --- #}
+	{% set ie = p.get("mandatory_installer_extract") %}
+	{% if ie is not none %}
+		{{ show_block("Installer contents (" ~ (ie.get("installer") or "") ~ " " ~ (ie.get("version") or "") ~ ")", ie) }}
 	{% endif %}
 
 	{# --- Ghidra (experimental) --- #}

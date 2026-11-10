@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     osslsigncode \
     firejail \
     upx-ucl \
+    mupdf-tools tesseract-ocr whois innoextract \
   && rm -rf /var/lib/apt/lists/*
 
 # radare2 — try apt first, fall back to official .deb from GitHub

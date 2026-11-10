@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from tools.cli_tools import (
+    network_artifacts_scan, phishing_analysis_scan, email_parse, detect_installer, installer_extract,
     guess_kind_from_fileinfo,
     file_info, sha256, entropy_shannon, strings_ascii, extract_payloads,
     radare2_quick_json, radare2_entry_disasm,
@@ -431,4 +432,81 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
             if arc.get("pe_strings_preview"):
                 pre["strings_preview"] = arc["pe_strings_preview"][:12000]
 
+    _installer_step(pre, sample, cb)
+    _phishing_step(pre, sample, cb)
+    _network_artifacts_step(pre, sample, cb)
     return pre
+
+
+def _installer_step(pre: Dict[str, Any], sample: str, cb) -> None:
+    """Inno Setup / NSIS installers keep the real payload compressed — unpack it statically."""
+    target = pre.get("effective_sample") or sample
+    if pre.get("kind") != "pe":
+        return
+    det = detect_installer(target)
+    if not det:
+        return
+    cb(f"Installer detected ({det['type']} {det.get('version', '')}) — unpacking bundled files")
+    try:
+        pre["mandatory_installer_extract"] = installer_extract(target)
+    except Exception as e:
+        pre["mandatory_installer_extract"] = {"ok": False, "installer": det["type"], "version": det.get("version", ""),
+                                              "error": f"{type(e).__name__}: {e}", "stdout": ""}
+
+
+PHISHING_KINDS = ("pdf", "office_openxml", "email")
+
+
+def _phishing_step(pre: Dict[str, Any], sample: str, cb) -> None:
+    """Content-level phishing analysis for documents and e-mails (also OOXML that file(1) labels "office")."""
+    target = pre.get("effective_sample") or sample
+    kind = pre.get("kind")
+    try:
+        with open(target, "rb") as fh:
+            is_zip = fh.read(2) == b"PK"
+    except OSError:
+        is_zip = False
+    if kind not in PHISHING_KINDS and not (kind == "office" and is_zip):
+        return
+    if kind == "email":
+        cb("E-mail: parsing headers, body, links and attachments")
+        try:
+            pre["mandatory_email_parse"] = email_parse(target)
+        except Exception as e:
+            pre["mandatory_email_parse"] = {"ok": False, "error": f"{type(e).__name__}: {e}", "stdout": ""}
+    cb("Phishing analysis: text, links, sender, domain age")
+    try:
+        pre["mandatory_phishing_analysis"] = phishing_analysis_scan(target, progress_cb=cb)
+    except Exception as e:
+        pre["mandatory_phishing_analysis"] = {"ok": False, "error": f"{type(e).__name__}: {e}", "stdout": ""}
+
+
+def _network_artifacts_step(pre: Dict[str, Any], sample: str, cb) -> None:
+    """Whole-file network IOC scan on the analyzed file (promoted inner file for archives),
+    plus decoded text other tools already produced (FLOSS, macros, scripts, PDF/LNK/JAR output)."""
+    def _out(key: str) -> str:
+        v = pre.get(key)
+        if isinstance(v, dict):
+            return (v.get("stdout") or "") + "\n" + (v.get("stderr") or "")
+        return v if isinstance(v, str) else ""
+
+    extra = {
+        "floss": _out("floss_result"),
+        "script_content": _out("mandatory_script_content"),
+        "olevba": _out("mandatory_olevba_json"),
+        "openxml_extract": _out("mandatory_openxml_extract"),
+        "pdf_analysis": _out("mandatory_pdf_analysis"),
+        "lnk_analysis": _out("mandatory_lnk_analysis"),
+        "javap": _out("mandatory_javap_disasm"),
+        "msi_pe_strings": (pre.get("mandatory_msi_extract") or {}).get("pe_strings_preview") or "",
+        # decoded e-mail bodies / PDF+OOXML text are invisible to strings(1)
+        "document_text": (pre.get("mandatory_phishing_analysis") or {}).get("document_text") or "",
+        "installer_script": (pre.get("mandatory_installer_extract") or {}).get("install_script") or "",
+        "document_links": "\n".join(l.get("href", "") for l in (pre.get("mandatory_phishing_analysis") or {}).get("links") or []),
+    }
+    target = pre.get("effective_sample") or sample
+    cb("Network artifacts: URLs/domains/IPs + domain age")
+    try:
+        pre["mandatory_network_artifacts"] = network_artifacts_scan(target, extra_sources=extra)
+    except Exception as e:
+        pre["mandatory_network_artifacts"] = {"ok": False, "error": f"{type(e).__name__}: {e}", "stdout": ""}

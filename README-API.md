@@ -232,6 +232,15 @@ Poll a job for status and results. Only the key that submitted the job can poll 
     "Imports VirtualAlloc, WriteProcessMemory — classic process injection pattern",
     "No valid authenticode signature"
   ],
+  "network_artifacts": {
+    "summary": "Network artifacts found statically — URLs: http://evil.example/gate.php; IPs: 185.220.101.4:8443. Domain age: evil.example 6d old NEWLY REGISTERED.",
+    "urls": ["http://evil.example/gate.php"], "domains": ["evil.example"], "ips": ["185.220.101.4:8443"], "emails": [],
+    "abused_services": [], "benign_infra": ["ocsp.digicert.com"],
+    "domain_ages": [{"domain": "evil.example", "created": "2026-11-04", "age_days": 6, "source": "rdap"}],
+    "network_apis": {"http_client": ["InternetOpenUrlW"], "download_to_file": ["URLDownloadToFileW"]},
+    "items": [{"type": "url", "value": "http://evil.example/gate.php", "class": "unknown", "sources": ["strings_utf16le"], "context": "..."}]
+  },
+  "phishing": {},
   "tools_used": [
     "mandatory_authenticode_verify",
     "mandatory_objdump_pe_headers",
@@ -463,3 +472,14 @@ if result.get("takens2d") and result["takens2d"].get("b64"):
 - API keys are single-use bearer tokens; treat them like passwords
 - Revoke compromised keys immediately with `python manage_keys.py revoke <key_id>`
 - The `ip` field logged in `web_recents` for API submissions is `api:<first-8-chars-of-key-id>` for traceability without exposing the full key
+
+### `network_artifacts` and `phishing`
+
+- `network_artifacts` — validated network IOCs from a whole-file scan (ASCII + UTF-16LE strings, FLOSS, decoded
+  document/e-mail text). Code identifiers such as `System.SysUtils` or `kernel32.dll` are rejected; certificate
+  CRL/OCSP, schema and installer-vendor hosts are listed under `benign_infra` and do not affect the score.
+  `domain_ages` comes from RDAP (whois fallback) and is disabled with `MALHAUS_DOMAIN_AGE_LOOKUP=0`.
+- `phishing` — present for PDF, DOCX/XLSX/PPTX, `.eml` and `.msg`: `score` 0–100, `verdict`
+  (`phishing` / `suspicious` / `no_strong_indicators`), `signals` (weighted), `links` (visible text vs real target,
+  with flags), sender headers and attachments for e-mail, domain ages, and the LLM's read (`llm`). Image-only PDFs
+  are OCR'd (tesseract, else the vision LLM) before analysis.
