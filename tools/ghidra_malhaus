@@ -52,11 +52,12 @@ import ghidra.program.model.mem.*;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.address.*;
+import ghidra.program.model.data.StringDataInstance;
 
 public class MalhausFullScan extends GhidraScript {
 
     static final Pattern IPV4 = Pattern.compile("\\b(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\b");
-    static final Pattern URL  = Pattern.compile("\\bhttps?://[^\\s\"']{6,}\\b", Pattern.CASE_INSENSITIVE);
+    static final Pattern URL  = Pattern.compile("\\bhttps?://[^\\s\"'\\x00-\\x1f\\x7f-\\xff]{6,}\\b", Pattern.CASE_INSENSITIVE);
 
     static final String[] NET = {
         "wsastartup","socket","connect","send","recv","getaddrinfo",
@@ -305,6 +306,270 @@ public class MalhausFullScan extends GhidraScript {
         return candidates;
     }
 
+    // ------------------------------------------------------------------
+    // STRING -> CODE LINKS
+    // Every defined string constant is classified by its SHAPE (registry path, file path, URL/endpoint,
+    // command line, JSON field) and resolved to the function(s) that reference it — directly, or
+    // through a pointer table (string arrays). Each function is reported with the strings it uses and
+    // the APIs it calls (itself + callees up to depth 2), so "loops over 8 registry keys and calls
+    // RegOpenKeyExW" becomes visible without any family- or vendor-specific keyword list.
+    // ------------------------------------------------------------------
+    static final Pattern SHAPE_REG  = Pattern.compile("(?i)^(?:\\\\?registry\\\\machine\\\\|HK(?:LM|CU|CR|U|CC|EY_[A-Z_]+)\\\\|SOFTWARE\\\\|SYSTEM\\\\|HARDWARE\\\\|SAM\\\\|SECURITY\\\\)|\\\\CurrentVersion\\\\|\\\\CurrentControlSet\\\\");
+    static final Pattern SHAPE_URL  = Pattern.compile("(?i)^(?:https?|ftp|wss?)://|^/[a-z0-9_.-]+/[a-z0-9_./?=&%{}-]*$|^/[a-z0-9_-]{2,}\\?|^[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.(?:com|net|org|co|io|ru|cn|xyz|top|info|biz|online|site|app|dev)$");
+    static final Pattern SHAPE_CMD  = Pattern.compile("(?i)(?:^|\\s|\")(?:cmd(?:\\.exe)?\\s+/[ck]\\b|/c\\s+\\S|powershell|pwsh|rundll32|regsvr32|mshta|wscript|cscript|schtasks|bitsadmin|certutil|wmic|reg(?:\\.exe)?\\s+(?:add|delete|query)|sc(?:\\.exe)?\\s+(?:create|config|start|stop)|net\\s+(?:user|stop|start))\\b|\\s/[a-z]{1,3}\\s+\\S+\\.exe\\b");
+    static final Pattern SHAPE_PATH = Pattern.compile("(?i)^[a-z]:\\\\|^\\\\\\\\|^%[a-z_]+%\\\\|^\\{[a-z]+\\}\\\\|\\\\(?:AppData|Local|Roaming|Temp|ProgramData|Program Files|System32|Users|Startup|Prefetch|User Data|Profiles)\\b|\\\\[A-Za-z0-9 _.$~()-]{2,}\\\\[A-Za-z0-9 _.$~()-]{2,}|\\\\[^\\\\\\s]+\\.(?:exe|dll|sys|dat|db|sqlite|json|log|ini|lnk|tmp|bat|ps1|vbs|token)$");
+    static final Pattern SHAPE_JSON = Pattern.compile("\"[A-Za-z_][A-Za-z0-9_]{2,40}\"\\s*:");
+    static final Pattern SHAPE_POSIX = Pattern.compile("^/(?:usr|etc|bin|sbin|tmp|var|proc|dev|home|root|opt|lib|lib32|lib64|sys|run|mnt|srv|boot|Library|Users|Applications|System|private)(?:/|$)");
+    static final Pattern SHAPE_PATH2 = Pattern.compile("(?i)^[a-z0-9_.][\\w .-]*(?:/[\\w .-]+){2,}/?$|^[\\w.-]+\\.(?:sqlite|db|json|dat|log|token|ini|cfg|key|pem)$");
+    static final Pattern SHAPE_FMT  = Pattern.compile("%(?:\\d*)(?:l|ll|h)?[sdSxXuip]");
+
+    static final String[] REG_API  = { "regopenkey","regqueryvalue","regenumkey","regenumvalue","regsetvalue","regcreatekey","regdeletekey","reggetvalue","ntopenkey","ntqueryvaluekey","shgetvalue","regloadkey" };
+    static final String[] FILE_API = { "createfile","readfile","writefile","copyfile","movefile","deletefile","findfirstfile","findnextfile","getfileattributes","pathfileexists","fopen","_wfopen","sqlite3_open","getfilesize","createdirectory","shgetfolderpath","shgetknownfolderpath","expandenvironmentstrings","gettemppath" };
+    static final String[] PROC_API = { "createprocess","shellexecute","winexec","openprocess","terminateprocess","createtoolhelp32snapshot","process32first","process32next","enumprocesses","virtualallocex","writeprocessmemory","createremotethread","ntcreatethreadex","queueuserapc","setthreadcontext","resumethread","=system","=_wsystem","_popen" };
+    static final String[] NET_API  = { "winhttp","internetopen","internetconnect","httpopenrequest","httpsendrequest","internetreadfile","urldownloadtofile","wsastartup","socket","connect","send","recv","getaddrinfo","gethostbyname","wsasend","wsarecv" };
+    static final String[] SYS_API  = { "getcomputername","getusername","getversionex","rtlgetversion","globalmemorystatus","getsysteminfo","getnativesysteminfo","getadaptersinfo","getadaptersaddresses","getdiskfreespace","getvolumeinformation","getsystemmetrics","enumdisplaymonitors","gettickcount64","getsystemfirmwaretable","setupdigetclassdevs","getlogicaldrives","getsystemdefaultlangid","getkeyboardlayout","getcursorpos","getlastinputinfo" };
+
+    static final int LINK_MAX_FUNCS = 30;
+    static final int LINK_MAX_STRINGS = 14;
+    static final int LINK_DECOMPILE_TOP = 6;
+
+    static class LinkInfo {
+        final Function f;
+        final Map<String, LinkedHashSet<String>> byShape = new LinkedHashMap<>();
+        final Set<String> apis = new TreeSet<>();
+        int score;
+        LinkInfo(Function f) { this.f = f; }
+        int count(String shape) { LinkedHashSet<String> s = byShape.get(shape); return s == null ? 0 : s.size(); }
+        int total() { int t = 0; for (LinkedHashSet<String> s : byShape.values()) t += s.size(); return t; }
+    }
+
+    private static String shapeOf(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        if (t.length() < 4 || t.length() > 600) return null;
+        if (SHAPE_REG.matcher(t).find()) return "registry";
+        if (SHAPE_POSIX.matcher(t).find()) return "path";
+        if (SHAPE_URL.matcher(t).find()) return "url";
+        if (SHAPE_CMD.matcher(t).find()) return "cmdline";
+        if (SHAPE_JSON.matcher(t).find()) return "json";
+        if (SHAPE_PATH.matcher(t).find() || SHAPE_PATH2.matcher(t).find()) return "path";
+        return null;
+    }
+
+    private String apiName(Function cf) {
+        Function g = cf;
+        if (g.isThunk()) {
+            Function th = g.getThunkedFunction(true);
+            if (th != null) g = th;
+        }
+        return g.getName();
+    }
+
+    /** API names a function reaches: its own calls plus callees up to `depth` levels. */
+    private Set<String> reachedApis(Function f, int depth, Map<Function, Set<String>> memo) {
+        if (memo.containsKey(f)) return memo.get(f);
+        Set<String> out = new TreeSet<>();
+        memo.put(f, out);  // cycle guard
+        try {
+            for (Function cf : f.getCalledFunctions(monitor)) {
+                Function g = cf.isThunk() && cf.getThunkedFunction(true) != null ? cf.getThunkedFunction(true) : cf;
+                if (g.isExternal()) { out.add(g.getName()); continue; }
+                if (depth > 0 && g.getBody().getNumAddresses() < 4000) out.addAll(reachedApis(g, depth - 1, memo));
+            }
+        } catch (Exception ignored) {}
+        // indirect calls through the IAT (call [__imp_X]) that Ghidra did not turn into call edges
+        ReferenceManager rm = currentProgram.getReferenceManager();
+        SymbolTable st = currentProgram.getSymbolTable();
+        AddressIterator ai = rm.getReferenceSourceIterator(f.getBody(), true);
+        int n = 0;
+        while (ai.hasNext() && n++ < 20000) {
+            Address a = ai.next();
+            for (Reference r : rm.getReferencesFrom(a)) {
+                Address to = r.getToAddress();
+                if (to.isExternalAddress()) {
+                    Symbol s = st.getPrimarySymbol(to);
+                    if (s != null) out.add(s.getName());
+                }
+            }
+        }
+        return out;
+    }
+
+    // needle "=name" matches the API name exactly (e.g. =system, not GetSystemInfo); others are substrings
+    private static boolean apiMatch(String lower, String n) {
+        return n.startsWith("=") ? lower.equals(n.substring(1)) : lower.contains(n);
+    }
+
+    private static boolean anyApi(Set<String> apis, String[] needles) {
+        for (String a : apis) { String l = a.toLowerCase(Locale.ROOT); for (String n : needles) if (apiMatch(l, n)) return true; }
+        return false;
+    }
+
+    private static List<String> apisIn(Set<String> apis, String[] needles) {
+        List<String> out = new ArrayList<>();
+        for (String a : apis) { String l = a.toLowerCase(Locale.ROOT); for (String n : needles) if (apiMatch(l, n)) { out.add(a); break; } }
+        return out;
+    }
+
+    /** NUL-terminated ASCII or UTF-16LE string at `a` (defined or not), or null. */
+    private String stringAt(Address a) {
+        Data d = currentProgram.getListing().getDefinedDataAt(a);
+        if (d != null) {
+            StringDataInstance sdi = StringDataInstance.getStringDataInstance(d);
+            if (sdi != StringDataInstance.NULL_INSTANCE) return sdi.getStringValue();
+        }
+        Memory mem = currentProgram.getMemory();
+        byte[] b = new byte[640];
+        int n;
+        try { n = mem.getBytes(a, b); } catch (Exception e) { return null; }
+        if (n < 8) return null;
+        StringBuilder sb = new StringBuilder();
+        boolean wide = b[1] == 0 && b[0] >= 0x20 && b[0] < 0x7f;
+        int step = wide ? 2 : 1;
+        for (int i = 0; i + step - 1 < n; i += step) {
+            int c = b[i] & 0xff;
+            if (wide && b[i + 1] != 0) return null;  // non-ASCII UTF-16: not a plain path/key/URL
+            if (c == 0) break;
+            if (c < 0x20 && c != 9) return null;
+            if (c >= 0x7f) return null;
+            sb.append((char) c);
+        }
+        return sb.length() >= 4 ? sb.toString() : null;
+    }
+
+    private boolean isDataAddr(Address a) {
+        if (a == null || !a.isMemoryAddress()) return false;
+        MemoryBlock blk = currentProgram.getMemory().getBlock(a);
+        return blk != null && blk.isInitialized() && !blk.isExecute();
+    }
+
+    /** Strings behind a data reference: the string itself, or every entry of a pointer table of strings. */
+    private List<String> stringsBehind(Address a, Map<Address, List<String>> cache) {
+        List<String> hit = cache.get(a);
+        if (hit != null) return hit;
+        List<String> out = new ArrayList<>();
+        String s = stringAt(a);
+        if (s != null) {
+            out.add(s);
+        } else {
+            Memory mem = currentProgram.getMemory();
+            int psz = currentProgram.getDefaultPointerSize();
+            AddressSpace sp = a.getAddressSpace();
+            for (int k = 0; k < 96; k++) {
+                try {
+                    Address slot = a.add((long) k * psz);
+                    // a slot something else references is the start of the next object: the table ended
+                    if (k > 0 && currentProgram.getReferenceManager().hasReferencesTo(slot)) break;
+                    long v = psz == 8 ? mem.getLong(slot) : (mem.getInt(slot) & 0xffffffffL);
+                    if (v == 0) { if (k == 0) break; continue; }  // NULL-terminated or sparse tables
+                    Address t = sp.getAddress(v);
+                    if (!isDataAddr(t)) break;
+                    String e = stringAt(t);
+                    if (e == null) break;
+                    out.add(e);
+                } catch (Exception ex) { break; }
+            }
+        }
+        cache.put(a, out);
+        return out;
+    }
+
+    private void addLink(Map<Function, LinkInfo> links, Function f, String shape, String s) {
+        if (f == null || f.isThunk()) return;
+        LinkInfo li = links.computeIfAbsent(f, LinkInfo::new);
+        li.byShape.computeIfAbsent(shape, k -> new LinkedHashSet<>()).add(s);
+    }
+
+    private List<LinkInfo> stringLinks() {
+        Listing listing = currentProgram.getListing();
+        FunctionManager fm = currentProgram.getFunctionManager();
+        ReferenceManager rm = currentProgram.getReferenceManager();
+        Map<Function, LinkInfo> links = new HashMap<>();
+
+        // Walk every function's data references (covers strings Ghidra never defined, and string tables)
+        Map<Address, List<String>> cache = new HashMap<>();
+        int nf = 0;
+        FunctionIterator fit = fm.getFunctions(true);
+        while (fit.hasNext() && !monitor.isCancelled() && nf < 60000) {
+            Function f = fit.next();
+            if (f.isThunk() || f.isExternal()) continue;
+            nf++;
+            AddressIterator src = rm.getReferenceSourceIterator(f.getBody(), true);
+            int nr = 0;
+            while (src.hasNext() && nr++ < 5000) {
+                for (Reference ref : rm.getReferencesFrom(src.next())) {
+                    Address to = ref.getToAddress();
+                    if (ref.getReferenceType().isFlow() || !isDataAddr(to)) continue;
+                    for (String s : stringsBehind(to, cache)) {
+                        String shape = shapeOf(s);
+                        if (shape == null) continue;
+                        String t = s.trim().replace("\n", "\\n").replace("\r", "");
+                        if (t.length() > 160) t = t.substring(0, 157) + "...";
+                        addLink(links, f, shape, t);
+                    }
+                }
+            }
+        }
+
+        Map<Function, Set<String>> memo = new HashMap<>();
+        List<LinkInfo> out = new ArrayList<>();
+        for (LinkInfo li : links.values()) {
+            if (monitor.isCancelled()) break;
+            li.apis.addAll(reachedApis(li.f, 2, memo));
+            int reg = li.count("registry"), url = li.count("url"), cmd = li.count("cmdline"),
+                json = li.count("json"), path = li.count("path");
+            int sc = reg + url * 2 + cmd * 3 + json + path;
+            if (reg > 0 && anyApi(li.apis, REG_API))  sc += 4 + Math.min(reg, 12);
+            if (path > 0 && anyApi(li.apis, FILE_API)) sc += 3 + Math.min(path, 10);
+            if (url > 0 && anyApi(li.apis, NET_API))   sc += 6;
+            if (cmd > 0 && anyApi(li.apis, PROC_API))  sc += 6;
+            if (json >= 3) sc += 4 + Math.min(json, 20) / 2;
+            if (json >= 3 && anyApi(li.apis, SYS_API)) sc += 6;
+            li.score = sc;
+            if (li.total() >= 2 || cmd > 0 || (url > 0 && anyApi(li.apis, NET_API))) out.add(li);
+        }
+        out.sort((a, b) -> b.score != a.score ? Integer.compare(b.score, a.score)
+                                              : Integer.compare(b.total(), a.total()));
+        return out;
+    }
+
+    private void writeLinks(BufferedWriter w, List<LinkInfo> links, DecompInterface ifc) throws IOException {
+        w.write("== STRING->CODE LINKS (functions using constant strings + the APIs they reach) ==\n");
+        if (links.isEmpty()) { w.write("No function references registry/path/URL/command/JSON-shaped strings.\n\n"); return; }
+        int limit = Math.min(LINK_MAX_FUNCS, links.size());
+        for (int i = 0; i < limit; i++) {
+            LinkInfo li = links.get(i);
+            List<String> what = new ArrayList<>();
+            for (Map.Entry<String, LinkedHashSet<String>> e : li.byShape.entrySet()) what.add(e.getKey() + "=" + e.getValue().size());
+            w.write("\n[L" + (i + 1) + "] link_score=" + li.score + "  " + li.f.getName() + " @ " + li.f.getEntryPoint()
+                    + "  strings: " + String.join(", ", what) + "\n");
+            List<String> groups = new ArrayList<>();
+            List<String> g;
+            if (!(g = apisIn(li.apis, REG_API)).isEmpty())  groups.add("registry: " + String.join(",", g));
+            if (!(g = apisIn(li.apis, FILE_API)).isEmpty()) groups.add("file: " + String.join(",", g));
+            if (!(g = apisIn(li.apis, PROC_API)).isEmpty()) groups.add("process: " + String.join(",", g));
+            if (!(g = apisIn(li.apis, NET_API)).isEmpty())  groups.add("network: " + String.join(",", g));
+            if (!(g = apisIn(li.apis, SYS_API)).isEmpty())  groups.add("system-info: " + String.join(",", g));
+            if (!groups.isEmpty()) w.write("  reaches APIs -> " + String.join(" | ", groups) + "\n");
+            for (Map.Entry<String, LinkedHashSet<String>> e : li.byShape.entrySet()) {
+                int k = 0;
+                for (String s : e.getValue()) {
+                    if (k++ >= LINK_MAX_STRINGS) { w.write("    (" + e.getKey() + ") ... +" + (e.getValue().size() - LINK_MAX_STRINGS) + " more\n"); break; }
+                    w.write("    (" + e.getKey() + ") " + s + "\n");
+                }
+            }
+            if (i < LINK_DECOMPILE_TOP && ifc != null) {
+                DecompileResults res = ifc.decompileFunction(li.f, 6, monitor);
+                if (res != null && res.decompileCompleted() && res.getDecompiledFunction() != null) {
+                    w.write("  --- PSEUDOCODE (trimmed) ---\n");
+                    w.write(trimLines(res.getDecompiledFunction().getC(), 35));
+                }
+            }
+        }
+        if (links.size() > limit) w.write("\n(" + (links.size() - limit) + " more linked functions not shown)\n");
+        w.write("\n");
+    }
+
     @Override
     public void run() throws Exception {
         String outPath = (getScriptArgs().length > 0) ? getScriptArgs()[0] : "/tmp/ghidra_llm_report.txt";
@@ -366,6 +631,12 @@ public class MalhausFullScan extends GhidraScript {
             w.write("== GLOBAL (compact) ==\n");
             w.write("Raw indicators (" + raw.size() + "): " + String.join(", ", raw) + "\n");
             w.write("Global malice_score=" + globalMal + " combos=" + String.join(", ", globalCombos) + "\n\n");
+
+            try {
+                writeLinks(w, stringLinks(), ifc);
+            } catch (Exception e) {
+                w.write("== STRING->CODE LINKS failed: " + e + " ==\n\n");
+            }
 
             if (scored.isEmpty()) {
                 w.write("No functions with malice_score > 0 were found.\n");

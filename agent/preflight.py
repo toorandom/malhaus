@@ -4,7 +4,7 @@ from typing import Any, Dict
 from tools.cli_tools import (
     network_artifacts_scan, phishing_analysis_scan, email_parse, detect_installer, installer_extract,
     guess_kind_from_fileinfo,
-    file_info, sha256, entropy_shannon, strings_ascii, extract_payloads,
+    file_info, sha256, entropy_shannon, strings_ascii, strings_preview_text, extract_payloads, code_links,
     radare2_quick_json, radare2_entry_disasm,
     objdump_pe_headers, objdump_pe_imports_dynamic, ghidra_malhaus,
     readelf_all, objdump_elf_dynamic, ldd_deps,
@@ -114,7 +114,7 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
         if (floss_result.get("stdout") or "").strip():
             pre["floss_result"] = floss_result
     cb("Extracting strings")
-    preview = (strings_ascii(sample).get("stdout", "") or "")[:12000]
+    preview = strings_preview_text(sample)
 
     cb("Extracting embedded payloads")
     extraction = extract_payloads(sample)
@@ -299,7 +299,7 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
                 if (floss_result.get("stdout") or "").strip():
                     pre["floss_result"] = floss_result
             cb(f"[{inner_name}] Extracting strings")
-            pre["strings_preview"] = (strings_ascii(inner).get("stdout", "") or "")[:12000]
+            pre["strings_preview"] = strings_preview_text(inner)
 
             # Run the appropriate analysis for the promoted kind
             if kind == "pe":
@@ -432,13 +432,24 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
             if arc.get("pe_strings_preview"):
                 pre["strings_preview"] = arc["pe_strings_preview"][:12000]
 
-    _installer_step(pre, sample, cb)
+    _code_links_step(pre, sample, cb)
+    _installer_step(pre, sample, cb, options)
     _phishing_step(pre, sample, cb)
     _network_artifacts_step(pre, sample, cb)
     return pre
 
 
-def _installer_step(pre: Dict[str, Any], sample: str, cb) -> None:
+def _code_links_step(pre: Dict[str, Any], sample: str, cb) -> None:
+    """radare2 string->function links (registry/path/URL/command/JSON strings + the APIs each function
+    reaches) for PE/ELF — seconds, so it also runs on every sub-component, Ghidra or not."""
+    if pre.get("kind") not in ("pe", "elf"):
+        return
+    target = pre.get("effective_sample") or sample
+    cb("radare2: linking strings to the functions that use them")
+    pre["mandatory_code_links"] = code_links(target)
+
+
+def _installer_step(pre: Dict[str, Any], sample: str, cb, options: Dict[str, Any] | None = None) -> None:
     """Inno Setup / NSIS installers keep the real payload compressed — unpack it statically."""
     target = pre.get("effective_sample") or sample
     if pre.get("kind") != "pe":
@@ -452,6 +463,26 @@ def _installer_step(pre: Dict[str, Any], sample: str, cb) -> None:
     except Exception as e:
         pre["mandatory_installer_extract"] = {"ok": False, "installer": det["type"], "version": det.get("version", ""),
                                               "error": f"{type(e).__name__}: {e}", "stdout": ""}
+        return
+    # Ghidra on the bundled payload, not only on the installer runtime (which is all a plain Ghidra run sees)
+    if (options or {}).get("use_ghidra"):
+        import os as _os
+        files = [f for f in (pre["mandatory_installer_extract"].get("files") or [])
+                 if f.get("kind") == "pe" and f.get("path") and not Path(f["path"]).name.startswith("chunk")]
+        # unsigned executables first (signed vendor runtime DLLs are the least interesting), then larger
+        files.sort(key=lambda f: (_pe_is_signed(f["path"]), not f["path"].lower().endswith(".exe"), -f.get("size", 0)))
+        cap = int(_os.environ.get("MALHAUS_GHIDRA_PAYLOAD_MAX", "2") or 2)
+        res = _ghidra_on_extracted_pes([f["path"] for f in files], options or {}, cb, label="installer payload", cap=cap)
+        if res:
+            pre.setdefault("mandatory_ghidra_extracted_pes", {}).update(res)
+
+
+def _pe_is_signed(path: str) -> bool:
+    try:
+        import pefile
+        return bool(pefile.PE(path, fast_load=True).OPTIONAL_HEADER.DATA_DIRECTORY[4].Size)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 PHISHING_KINDS = ("pdf", "office_openxml", "email")

@@ -68,6 +68,12 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
         snips["subcomponent_tool_outputs"] = llm_details(pre["mandatory_subcomponents"])
     if pre.get("mandatory_phishing_analysis"):
         snips["phishing_analysis"] = _snip_stdout(pre.get("mandatory_phishing_analysis"), 4000)
+    if (pre.get("mandatory_code_links") or {}).get("ok"):
+        snips["code_links"] = _snip_stdout(pre.get("mandatory_code_links"), 6000)
+    if pre.get("mandatory_ghidra_extracted_pes"):
+        snips["ghidra_extracted_pes"] = "\n\n".join(
+            f"=== {name} ===\n{_snip_stdout(res, 4000)}" for name, res in pre["mandatory_ghidra_extracted_pes"].items()
+        )[:8000]
     if pre.get("mandatory_email_parse"):
         snips["email_parse"] = _snip_stdout(pre.get("mandatory_email_parse"), 6000)
     kind = pre.get("kind", "unknown")

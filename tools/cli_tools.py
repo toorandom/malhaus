@@ -401,6 +401,60 @@ def sha256(path: str) -> Dict[str, Any]:
 def strings_ascii(path: str) -> Dict[str, Any]:
     return run_jailed(["strings", "-a", "-n", "6", path], path, timeout=40, max_bytes=650000)
 
+def strings_preview_text(path: str, cap: int = 12000, notable_cap: int = 4500) -> str:
+    """Strings preview for the strings LLM / suspicious-string filter. Windows binaries keep registry keys,
+    paths and URLs as UTF-16LE, which `strings -a` (ASCII) never shows, and a plain head of the output is
+    mostly runtime noise: shape-matched strings (registry/path/URL/command/JSON, both encodings) go first,
+    then the ASCII strings in file order."""
+    from tools.code_links import shape_of
+    ascii_out = strings_ascii(path).get("stdout", "") or ""
+    wide_out = run_jailed(["strings", "-a", "-n", "6", "-el", path], path, timeout=40,
+                          max_bytes=650000).get("stdout", "") or ""
+    # behaviour-bearing shapes first so a wall of JSON field names cannot push registry keys/commands out
+    prio = {"cmdline": 0, "registry": 1, "url": 2, "path": 3, "json": 4}
+    cands, seen = [], set()
+    for line in ascii_out.splitlines() + wide_out.splitlines():
+        s = line.strip()
+        if s in seen or len(s) < 6 or sum(c.isalnum() for c in s) < 0.5 * len(s):
+            continue
+        sh = shape_of(s)
+        if sh:
+            seen.add(s)
+            cands.append((prio.get(sh, 9), len(cands), s))
+    notable, used = [], 0
+    for _p, _i, s in sorted(cands):
+        if used + len(s) + 1 > notable_cap:
+            continue
+        notable.append(s)
+        used += len(s) + 1
+    if not notable:
+        return ascii_out[:cap]
+    head = "### notable strings (registry/path/URL/command/JSON shaped; ASCII + UTF-16LE)\n" + "\n".join(notable)
+    body = "\n\n### strings (ASCII, file order)\n" + ascii_out
+    return (head + body)[:cap]
+
+@tool
+def code_links(path: str) -> Dict[str, Any]:
+    """PE/ELF: which function uses which constant string. radare2 resolves every registry-key, file-path,
+    URL/endpoint, command-line and JSON-field string (directly or through string-pointer arrays) to the
+    functions referencing it, with the APIs each function reaches (registry/file/process/network/
+    system-info). Shows WHAT a binary does with its strings (e.g. one function walking a list of registry
+    keys with RegOpenKeyExW). Seconds, no Ghidra. Use "path" on extracted inner binaries."""
+    from tools.code_links import code_links as _code_links
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+    except OSError as e:
+        return {"ok": False, "error": str(e), "stdout": ""}
+    if magic[:2] != b"MZ" and magic != b"\x7fELF":
+        return {"ok": False, "error": "code_links: not a PE/ELF binary", "stdout": ""}
+    if not which("r2"):
+        return {"ok": False, "error": "radare2 not installed", "stdout": ""}
+    try:
+        return _code_links(path, run_jailed)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"code_links failed: {type(e).__name__}: {e}", "stdout": ""}
+
 def _network_import_names(path: str) -> List[str]:
     """Imported symbol names (PE via pefile, ELF via objdump -T) for network-capability matching."""
     names: List[str] = []
@@ -717,9 +771,118 @@ def _inno_builtin_extract(path: str, outdir: Path, notes: List[str]) -> int:
         pos = c + max(used, 4)
     if recovered:
         notes.append("payload recovered by the built-in Inno decoder: PE files carved from the decompressed "
-                     "stream (names from version info; install paths unavailable for this setup version), "
+                     "stream (names from version info; install paths are in the decoded setup header below), "
                      "chunk*.bin = full decompressed file data")
     return recovered
+
+def _inno_read_block(data: bytes, start: int, span: int = 640) -> tuple:
+    """Inno "compressed block" (setup.0): CRC32 + stored size + compressed flag, then 4 KiB chunks each
+    behind their own CRC32, LZMA1-compressed since 4.1.6 (zlib before). The header layout in front of it
+    changes between versions (6.5+ adds an encryption header), so the block is located by its CRC: the
+    first offset whose CRC32 matches the size+flag fields (64-bit size since 6.5, 32-bit before)."""
+    import lzma, struct, zlib as _z
+    lim = min(start + span, len(data) - 13)
+    for i in range(max(0, start), lim):
+        c = struct.unpack_from("<I", data, i)[0]
+        if _z.crc32(data[i + 4:i + 13]) == c:
+            size, comp, pos = struct.unpack_from("<q", data, i + 4)[0], data[i + 12], i + 13
+        elif _z.crc32(data[i + 4:i + 9]) == c:
+            size, comp, pos = struct.unpack_from("<I", data, i + 4)[0], data[i + 8], i + 9
+        else:
+            continue
+        if not (16 < size <= 256 * 1024 * 1024) or pos + size > len(data):
+            continue
+        raw, q, end = bytearray(), pos, pos + size
+        while q < end - 4:
+            n = min(4096, end - q - 4)
+            raw += data[q + 4:q + 4 + n]
+            q += 4 + n
+        if not comp:
+            return bytes(raw), i, end
+        b0 = raw[0]
+        lc, r = b0 % 9, b0 // 9
+        try:
+            dec = lzma.LZMADecompressor(lzma.FORMAT_RAW, filters=[{
+                "id": lzma.FILTER_LZMA1, "dict_size": int.from_bytes(raw[1:5], "little"),
+                "lc": lc, "lp": r % 5, "pb": r // 5}])
+            out = dec.decompress(bytes(raw[5:]), 256 * 1024 * 1024)
+        except (lzma.LZMAError, ValueError):
+            try:
+                out = _z.decompress(bytes(raw))
+            except _z.error:
+                continue
+        if len(out) >= 64:
+            return out, i, end
+    return None, start, start
+
+_RE_U16_RUN = re.compile(rb"(?:[\x20-\x7e\t]\x00){4,}")
+_RE_A_RUN = re.compile(rb"[\x20-\x7e\t]{5,}")
+_RE_INNO_IDENT = re.compile(r"^[A-Z][A-Z0-9_]{3,}$")
+
+def _inno_setup_script(data: bytes, offs: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """Decode the Inno Setup header (setup.0) and return its strings: [Code] script literals (commands,
+    log lines, file/registry targets), [Files]/[Icons] install paths, [Registry]/[Run] entries.
+    The default wizard message table (thousands of UI strings) is skipped."""
+    from tools.code_links import shape_of
+    cands = []
+    o0 = (offs or {}).get("offset0")
+    if o0 and data[o0:o0 + 22] == b"Inno Setup Setup Data ":
+        cands.append(o0)
+    cands += [m.start() for m in re.finditer(rb"Inno Setup Setup Data \(\d+\.\d+\.\d+\)", data) if m.start() not in cands]
+    hdr, ver = None, ""
+    for c in cands[:8]:
+        out, _i, _end = _inno_read_block(data, c + 64)
+        if out:
+            hdr = out
+            ver = data[c:c + 64].split(b"\x00", 1)[0].decode("latin-1", "replace")
+            break
+    if hdr is None:
+        return {"error": "setup header not decodable (encrypted setup or unsupported layout)"}
+    skip = []
+    for m in re.finditer(rb"Inno Setup Messages \(", hdr):  # length-prefixed compiled .isl blobs
+        n = int.from_bytes(hdr[m.start() - 4:m.start()], "little") if m.start() >= 4 else 0
+        if 0 < n <= len(hdr) - m.start():
+            skip.append((m.start(), m.start() + n))
+    runs = []
+    for m in _RE_U16_RUN.finditer(hdr):
+        b = m.group()
+        # header strings are length-prefixed (u32 byte count): cut the run there, so the low byte of the
+        # NEXT string's length prefix (printable + 00) is not glued on ("...Compil32.exet")
+        n = int.from_bytes(hdr[m.start() - 4:m.start()], "little") if m.start() >= 4 else 0
+        if n >= 8 and n % 2 == 0 and len(b) == n + 2:  # exactly one glued character
+            b = b[:n]
+        runs.append((m.start(), b.decode("utf-16-le", "replace"), True))
+    runs += [(m.start(), m.group().decode("latin-1"), False) for m in _RE_A_RUN.finditer(hdr)]
+    runs.sort()
+    lines, prev = [], None
+    for pos, s, wide in runs:
+        if any(a <= pos < b for a, b in skip):
+            continue
+        s = s.strip()
+        if not s or s == prev:
+            continue
+        alnum = sum(ch.isalnum() for ch in s) / len(s)
+        if wide:
+            if alnum < 0.35:
+                continue
+        elif not (shape_of(s) or _RE_INNO_IDENT.match(s)
+                  or (" " in s and alnum >= 0.6 and len(re.findall(r"[A-Za-z]{3,}", s)) >= 2)):
+            continue  # image/bytecode noise
+        lines.append(s)
+        prev = s
+    targets = list(dict.fromkeys(s for s in lines if re.match(r"^\"?\{[a-z]+\}\\", s, re.I)))
+    regs = list(dict.fromkeys(s for s in lines if shape_of(s) == "registry"))
+    cmds = list(dict.fromkeys(s for s in lines if shape_of(s) == "cmdline" or "{cmd}" in s.lower()))
+    head = [f"Inno Setup header decoded ({ver}): {len(lines)} strings"
+            + (", default wizard message table skipped" if skip else "")]
+    if targets:
+        head.append("install targets: " + "; ".join(targets[:40]))
+    if regs:
+        head.append("registry: " + "; ".join(regs[:40]))
+    if cmds:
+        head.append("commands: " + "; ".join(cmds[:40]))
+    text = "\n".join(head) + "\n\n--- setup header / [Code] strings (in order) ---\n" + "\n".join(lines)
+    return {"text": text, "targets": targets, "version": ver, "strings": len(lines)}
 
 def detect_installer(path: str) -> Dict[str, Any]:
     """Cheap signature check: Inno Setup (setup data header) or NSIS (Nullsoft first-header magic)."""
@@ -791,6 +954,17 @@ def installer_extract(path: str) -> Dict[str, Any]:
                 res["error"] = (f"Inno Setup {det['version']}: payload not unpacked (innoextract unsupported/failed, "
                                 "built-in decoder and 7z found no decodable data chunk) — the installed files were "
                                 "NOT examined; dynamic analysis (detonation) recommended")
+        # setup header: [Code] script, install paths, registry/run entries (innoextract does not show the script)
+        try:
+            raw = Path(path).read_bytes()
+            hdr = _inno_setup_script(raw, _inno_offsets(raw))
+        except Exception as e:  # noqa: BLE001
+            hdr = {"error": f"{type(e).__name__}: {e}"}
+        if hdr.get("text"):
+            res["install_script"] = hdr["text"][:40000]
+            notes.append(f"setup header decoded: {hdr['strings']} strings, {len(hdr['targets'])} install targets")
+        else:
+            notes.append(f"setup header: {hdr.get('error')}")
         res["tool_output"] = "\n".join(notes)[-3000:]
     else:
         r = run_jailed(["7z", "x", "-y", "-bd", f"-o{outdir}", path], path, timeout=180, max_bytes=200000)
@@ -824,7 +998,8 @@ def installer_extract(path: str) -> Dict[str, Any]:
     for f in res["files"][:120]:
         lines.append(f"  {f['kind']:<14} {f['size']:>10}  H={f['entropy']}  {f['name']}  path={f['path']}")
     if res.get("install_script"):
-        lines += ["", "=== install script ([NSIS].nsi) ===", res["install_script"][:8000]]
+        label = "[NSIS].nsi" if det["type"] == "nsis" else "Inno Setup header / [Code] script"
+        lines += ["", f"=== install script ({label}) ===", res["install_script"][:8000]]
     res["stdout"] = "\n".join(lines)
     return res
 

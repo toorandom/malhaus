@@ -17,7 +17,8 @@ RE_WIN_PATH = re.compile(r"(?i)\b[a-z]:\\(?:[^\\\s\"']+\\)*[^\\\s\"']+")
 # Examples rejected: /I, /L3, /<-t
 RE_POSIX_PATH = re.compile(r"\b/(?:[A-Za-z0-9._-]{2,}/)+[A-Za-z0-9._-]{2,}/?\b")
 
-RE_REG = re.compile(r"(?i)\bHK(?:LM|CU|CR|U|CC)\\[^\s\"']+")
+# hive-prefixed keys, and hive-less keys the way code passes them to RegOpenKeyEx (hive is a separate HKEY)
+RE_REG = re.compile(r"(?i)\bHK(?:LM|CU|CR|U|CC|EY_[A-Z_]+)\\[^\s\"']+|(?<![\w\\])(?:SOFTWARE|SYSTEM|HARDWARE)\\[A-Za-z0-9][^\"'<>|]*")
 
 RE_B64 = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{120,}={0,2}(?![A-Za-z0-9+/=])")
 RE_HEX = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{120,}(?![0-9a-fA-F])")
@@ -277,6 +278,7 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         _add(low_level_snippets, "radare2_entry",        _s("mandatory_radare2_entry"))
         _add(low_level_snippets, "dotnet_analysis",      _s("mandatory_dotnet_analysis"))
         _add(low_level_snippets, "binwalk",              _s("mandatory_binwalk"))
+        _add(low_level_snippets, "code_links",           _s("mandatory_code_links"))
         if options.get("use_ghidra"):
             _add(low_level_snippets, "ghidra_malhaus",   _s("mandatory_ghidra_malhaus"))
 
@@ -285,6 +287,7 @@ def build_evidence_pack(preflight: Dict[str, Any], options: Dict[str,Any] | None
         _add(low_level_snippets, "objdump_elf_dynamic",  _s("mandatory_objdump_elf_dynamic"))
         _add(low_level_snippets, "ldd_deps",             _s("mandatory_ldd_deps"))
         _add(low_level_snippets, "binwalk",              _s("mandatory_binwalk"))
+        _add(low_level_snippets, "code_links",           _s("mandatory_code_links"))
         if options.get("use_ghidra"):
             _add(low_level_snippets, "ghidra_malhaus",   _s("mandatory_ghidra_malhaus"))
 
