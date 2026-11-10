@@ -539,7 +539,7 @@ def upload():
         url, saved_path, orig_name, ip, remaining, use_ghidra, archive_password
 
     ALLOWED_KINDS = {"pe", "elf", "office", "office_openxml", "ps1", "shell", "js", "msi",
-                     "pdf", "lnk", "vbs", "hta", "archive", "email"}
+                     "pdf", "lnk", "vbs", "hta", "archive", "email", "jar"}
 
     def _stream():
         path = _saved_path

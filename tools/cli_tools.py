@@ -87,6 +87,38 @@ def _sha256_file(p: Path) -> str:
 def _safe_mkdir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+# Interpreted scripts with no dedicated pipeline (Perl/CGI, Python, Ruby, PHP, web shells, batch, ...)
+# go to the generic "shell" script class: script_content + base64 payload extraction + LLM review.
+_SCRIPT_EXTS = {
+    ".sh", ".bash", ".zsh", ".ksh", ".csh", ".bat", ".cmd",
+    ".pl", ".pm", ".cgi", ".fcgi", ".py", ".pyw", ".rb", ".lua", ".tcl", ".awk", ".r",
+    ".php", ".php3", ".php4", ".php5", ".php7", ".phtml", ".phar",
+    ".jsp", ".jspx", ".asp", ".aspx", ".ashx", ".asmx", ".cfm",
+}
+
+def script_kind_from_header(head: bytes, ext: str = "", fileinfo: str = "") -> Optional[str]:
+    """Kind for an interpreted script, from its first bytes (shebang, <?php, <% ...), extension or
+    file(1) description. None when it does not look like a script."""
+    head = head.lstrip(b"\xef\xbb\xbf")  # UTF-8 BOM
+    first = head.split(b"\n", 1)[0].lower()
+    if first.startswith(b"#!"):
+        if b"pwsh" in first or b"powershell" in first:
+            return "ps1"
+        if re.search(rb"\b(node|nodejs|deno|bun)\b", first):
+            return "js"
+        return "shell"
+    hl = head[:512].lower()
+    if hl.startswith((b"<?php", b"<?=")) or b"<?php" in hl or re.match(rb"\s*<%[@=!\s]", hl) \
+            or b"<%@ page" in hl or b"<jsp:" in hl:
+        return "shell"
+    if ext in _SCRIPT_EXTS:
+        return "shell"
+    s = (fileinfo or "").lower()
+    if re.search(r"\b(perl|python|ruby|php|tcl|lua|awk|node)\b.*script|script(,)? [\w-]*\s*text executable|"
+                 r"dos batch file", s):
+        return "shell"
+    return None
+
 def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
     s = (fileinfo_stdout or "").lower()
     ext = Path(path).suffix.lower()
@@ -145,6 +177,16 @@ def guess_kind_from_fileinfo(fileinfo_stdout: str, path: str) -> str:
         return "shell"
     if ext in [".js", ".mjs", ".cjs"] or "javascript" in s:
         return "js"
+    # Perl/CGI, Python, Ruby, PHP, web shells...: shebang / markers / extension / file(1) wording
+    try:
+        with open(path, "rb") as _f:
+            head = _f.read(1024)
+    except OSError:
+        head = b""
+    if b"\x00" not in head[:1024]:
+        sk = script_kind_from_header(head, ext, s)
+        if sk:
+            return sk
     return "unknown"
 
 
@@ -1566,6 +1608,19 @@ def script_content(path: str) -> Dict[str, Any]:
 
 @tool
 def shell_lint(path: str) -> Dict[str, Any]:
+    """bash -n syntax check — only meaningful for sh/bash scripts (skipped for Perl, Python, PHP, ...)."""
+    try:
+        with open(path, "rb") as fh:
+            first = fh.readline(300).lower()
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    m = re.match(rb"#!\s*(?:/usr)?(?:/local)?/bin/(?:env\s+)?([\w.-]+)", first)
+    interp = m.group(1).decode() if m else ""
+    ext = Path(path).suffix.lower()
+    if (interp and interp not in ("sh", "bash", "dash", "ash", "ksh", "zsh")) or \
+            (not interp and ext not in ("", ".sh", ".bash", ".ksh", ".zsh")):
+        return {"ok": True, "stdout": f"skipped: not a POSIX shell script ({interp or ext}); bash -n does not apply",
+                "rc": 0}
     return run(["bash", "-n", path], timeout=10, max_bytes=100000)
 
 @tool
@@ -1994,7 +2049,7 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
             sz = f.stat().st_size
             all_files.append({"path": str(f.relative_to(outdir)), "size": sz})
             with open(f, "rb") as fh:
-                header = fh.read(8)
+                header = fh.read(1024)
             ext = f.suffix.lower()
             # For double-extension files (e.g. evil.jsp.txt), also check inner suffixes.
             # An attacker appends .txt to disguise a webshell — walk all suffixes left-to-right
@@ -2021,6 +2076,12 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
             # office_openxml, not recursed into as nested archives.
             if kind_f is None and ext in _EXT_KIND:
                 kind_f = _EXT_KIND[ext]
+
+            # 1c. Other interpreted scripts: .cgi/.pl/.py/.rb..., or extension-less files with a
+            # shebang / <?php / <% marker (binary-looking files are left to the archive check).
+            if kind_f is None and b"\x00" not in header and not header.startswith((b"PK", b"Rar!", b"7z", b"\x1f\x8b")):
+                all_script_exts = [e for e in all_exts if e in _SCRIPT_EXTS]
+                kind_f = script_kind_from_header(header, all_script_exts[0] if all_script_exts else ext)
 
             # 2. Detect nested archives — only if we haven't identified the file yet.
             # This prevents OpenXML docs (ZIP-based) from being wrongly recursed into.

@@ -37,7 +37,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 
 ALLOWED_KINDS = {
     "pe", "elf", "office", "office_openxml",
-    "ps1", "shell", "js", "msi", "pdf", "lnk", "vbs", "hta", "archive", "email",
+    "ps1", "shell", "js", "msi", "pdf", "lnk", "vbs", "hta", "archive", "email", "jar",
 }
 
 
