@@ -19,6 +19,9 @@ config.source
 maltriage-backup/
 *.tar.gz
 
-# Git
-.git/
+# Git — only the refs, so webapp/version.py can show the running commit
+.git/*
+!.git/HEAD
+!.git/refs
+!.git/packed-refs
 .gitignore

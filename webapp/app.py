@@ -73,6 +73,13 @@ def create_app():
 
     csrf.init_app(app)
 
+    from webapp.version import REPO_URL, version_info
+
+    @app.context_processor
+    def _inject_version():
+        v = version_info()
+        return {"app_version": v["version"], "app_version_url": v["url"], "repo_url": REPO_URL}
+
     # max upload size enforced by Flask
     app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
     # Preserve insertion order in JSON responses (don't sort keys alphabetically)

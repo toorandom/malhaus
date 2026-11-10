@@ -14,9 +14,10 @@
       <div class="brand-block">
         <img class="logo-text-big" src="{{ url_for('static', filename='img/malhaus.jpg') }}" alt="malhaus">
         <div class="byline">
-          <span class="tagline">AI Malware Analysis v0.4</span>
+          <span class="tagline">AI Malware Analysis <a class="mono" href="{{ app_version_url }}" target="_blank" rel="noopener" title="git commit">{{ app_version }}</a></span>
           <span class="sep">·</span>
           by Eduardo Ruiz Duarte · <span class="mono">toorandom@gmail.com</span>
+          · <a href="{{ repo_url }}" target="_blank" rel="noopener">github.com/toorandom/malhaus</a>
         </div>
       </div>
 
@@ -31,27 +32,6 @@
         </div>
       </div>
     </header>
-
-    <section class="card news">
-      <style>
-        .news h2{display:flex;align-items:center;gap:8px}
-        .news .tag{font-size:10px;padding:2px 7px;border-radius:8px;background:#f0c64a;color:#0d1117;font-weight:600;letter-spacing:.04em}
-        .news ul{margin:6px 0 0;padding-left:18px;line-height:1.55;font-size:13px}
-        .news li b{font-weight:600}
-      </style>
-      <div class="row">
-        <h2><span class="tag">NEW</span> What's new</h2>
-        <div class="muted mono">2026-11-10</div>
-      </div>
-      <ul>
-        <li><b>E-mail analysis</b> — upload <span class="mono">.eml</span> or Outlook <span class="mono">.msg</span>: sender spoofing, Reply-To/Return-Path mismatch, SPF/DKIM/DMARC, attachments analysed automatically.</li>
-        <li><b>Phishing detection</b> for PDF, DOCX/XLSX/PPTX and e-mail — deceptive links (shown text vs real target), brand lookalike domains, credential forms, remote templates, lure wording, plus an LLM read of the text. Image-only PDFs are OCR'd.</li>
-        <li><b>Network artifacts</b> — URLs, domains and IPs found anywhere in the file (ASCII, UTF-16, deobfuscated strings) are now named in the verdict, with certificate/vendor hosts filtered out and network-capable imports listed.</li>
-        <li><b>Domain age</b> — embedded, sender and link domains are checked via RDAP/whois; newly registered or unregistered domains raise the score.</li>
-        <li><b>Installer unpacking</b> — Inno Setup and NSIS installers are unpacked so the bundled payload is inspected, not just the installer stub.</li>
-        <li><b>Fewer false positives</b> — code identifiers such as <span class="mono">System.SysUtils</span> or <span class="mono">kernel32.dll</span> are no longer reported as domains.</li>
-      </ul>
-    </section>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
