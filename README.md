@@ -4,6 +4,14 @@
 
 Self-hosted **malware static triage platform** powered by LLMs.
 
+> **News — 2026-11-10**
+> - **E-mail analysis** (`.eml`, `.msg`): sender spoofing, Reply-To/Return-Path mismatch, SPF/DKIM/DMARC, attachments analysed.
+> - **Phishing detection** for PDF, DOCX/XLSX/PPTX and e-mail: deceptive links, brand lookalikes, credential forms, remote templates, lure wording + LLM read; image-only PDFs are OCR'd.
+> - **Network artifacts**: URLs/domains/IPs from the whole file (ASCII, UTF-16, FLOSS) named in the verdict; certificate/vendor hosts filtered; network-capable imports listed.
+> - **Domain age** via RDAP/whois — newly registered or unregistered domains raise the score (`MALHAUS_DOMAIN_AGE_LOOKUP=0` to disable).
+> - **Installer unpacking**: Inno Setup (innoextract) and NSIS (7z) payloads are inspected.
+> - **Fewer false positives**: code identifiers like `System.SysUtils` are no longer reported as domains.
+
 Upload a suspicious file or paste a URL — malhaus runs it through a pipeline of static analysis tools (radare2, YARA, strings, objdump, oletools, floss, binwalk, exiftool, optional Ghidra…), feeds the results to an LLM of your choice, and returns a structured verdict with confidence score, key reasons, and full tool output.
 
 **Live demo:** [https://grothendieck.ff2.nl](https://grothendieck.ff2.nl)
