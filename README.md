@@ -4,15 +4,7 @@
 
 Self-hosted **malware static triage platform** powered by LLMs.
 
-> **News — 2026-11-10**
-> - **E-mail analysis** (`.eml`, `.msg`): sender spoofing, Reply-To/Return-Path mismatch, SPF/DKIM/DMARC, attachments analysed.
-> - **Phishing detection** for PDF, DOCX/XLSX/PPTX and e-mail: deceptive links, brand lookalikes, credential forms, remote templates, lure wording + LLM read; image-only PDFs are OCR'd.
-> - **Network artifacts**: URLs/domains/IPs from the whole file (ASCII, UTF-16, FLOSS) named in the verdict; certificate/vendor hosts filtered; network-capable imports listed.
-> - **Domain age** via RDAP/whois — newly registered or unregistered domains raise the score (`MALHAUS_DOMAIN_AGE_LOOKUP=0` to disable).
-> - **Installer unpacking**: Inno Setup (innoextract) and NSIS (7z) payloads are inspected.
-> - **Fewer false positives**: code identifiers like `System.SysUtils` are no longer reported as domains.
-
-Upload a suspicious file or paste a URL — malhaus runs it through a pipeline of static analysis tools (radare2, YARA, strings, objdump, oletools, floss, binwalk, exiftool, optional Ghidra…), feeds the results to an LLM of your choice, and returns a structured verdict with confidence score, key reasons, and full tool output.
+Upload a suspicious file or paste a URL — malhaus runs it through a pipeline of static analysis tools (radare2, strings, FLOSS, objdump, pefile, oletools, binwalk, exiftool, mupdf, tesseract, optional Ghidra…), feeds the results to an LLM of your choice, and returns a structured verdict with confidence score, key reasons, and full tool output.
 
 **Live demo:** [https://grothendieck.ff2.nl](https://grothendieck.ff2.nl)
 
@@ -22,17 +14,51 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 
 ## Features
 
-- PE, ELF, Office (OLE/OpenXML), PDF, PowerShell, shell script, JavaScript, **JAR/WAR/EAR** (Java)
-- Supports **Gemini, OpenAI, Azure AI Foundry, Claude, DeepSeek**, and any OpenAI-compatible server (Ollama, vLLM, LM Studio)
-- REST API with Bearer token authentication and per-key rate limiting
-- **E-mail** (`.eml`, Outlook `.msg`) — sender spoofing, SPF/DKIM/DMARC, attachments analysed with the right tool
-- **Phishing analysis** for PDF, DOCX/XLSX/PPTX and e-mail — deceptive links, brand lookalikes, lure wording, credential forms, LLM read of the text; image-only PDFs and pictures embedded in e-mails/documents (inline images, image attachments, HTML `data:` URIs, DOCX/PPTX/XLSX media) are OCR'd (tesseract or vision LLM) and QR codes decoded (zbarimg), so text-as-image lures are caught
-- **Network artifacts** — validated URLs/domains/IPs from ASCII + UTF-16 + FLOSS strings, network-capable imports, and **domain age** (RDAP/whois) for newly registered domains
-- MCP server — AI agents (Claude, Cursor, Continue…) can call `analyze` natively
-- Mathematical analysis visualizations — entropy profile, compression curve, bigram matrix, and a 3D byte-trigram point cloud with HDBSCAN density clustering
-- Optional Ghidra headless decompilation (PE/ELF)
-- Result cache by SHA-256 — re-submitting the same file is instant
-- Captcha-protected web UI; API bypasses captcha with a token
+### Supported inputs
+
+| Category | Formats | What is done |
+|----------|---------|--------------|
+| Windows executables | PE/PE32+ (EXE, DLL, SYS), DOS `.com` | Headers, sections + per-section entropy, imports/imphash, overlay, version info, Authenticode chain + signer, radare2 entry-point disassembly, FLOSS strings, binwalk; **UPX** auto-unpack; **.NET** metadata (dnfile) — Assembly.Load, injection/AV-tamper APIs, embedded resources, obfuscated names |
+| Linux executables | ELF | readelf, dynamic symbols, `ldd`, disassembly, FLOSS, binwalk, UPX unpack |
+| Office | OLE (DOC/XLS/PPT), OpenXML (DOCX/XLSX/PPTX, macro-enabled), RTF | olevba macros, oledump streams, oleobj/rtfobj embedded objects (extracted and analysed in turn), OpenXML part listing, remote-template / external-OLE injection |
+| PDF | PDF | pdfid / pdf-parser structure, JavaScript/actions, text layer, links, password form fields, OCR of image-only pages |
+| E-mail | `.eml`, Outlook `.msg` | From / display name / Reply-To / Return-Path, SPF/DKIM/DMARC, Received chain, body links, attachments saved and analysed with the right tool |
+| Scripts | PowerShell, VBS/VBE, HTA, JavaScript, shell/batch, **Perl/CGI, Python, Ruby, PHP, JSP/ASP web shells** | Content review, JS beautify, embedded base64 payload extraction; detected by shebang / `<?php` / `<%` markers / extension / `file(1)`, also without an extension |
+| Shortcuts | Windows `.lnk` | LnkParse3, exiftool, LECmd (when installed): target, arguments, hidden command lines |
+| Installers | MSI, Inno Setup, NSIS | MSI table/file inventory with entropy; PEs inside get full PE analysis (+ .NET, + Ghidra if enabled); Inno (innoextract) and NSIS (7z) payloads unpacked and the bundled payload inspected, not just the stub |
+| Java | JAR / WAR / EAR | Manifest, `jarsigner` verification, class list, `javap` disassembly, inner JARs |
+| Archives | ZIP, 7z, RAR (gzip/tar and further archives nested inside are unpacked too) | **Password-protected** archives (password field in UI/API), decompression-bomb check, the most interesting inner file is **promoted** and analysed (PE > ELF > MSI > Office > script > PDF > LNK); double extensions like `evil.jsp.txt` are seen through |
+| URLs | `http(s)://…` | Downloaded server-side (size-limited) and analysed like an upload |
+
+### Phishing & network intelligence
+
+- **Phishing analysis** for PDF, DOCX/XLSX/PPTX and e-mail — visible link text vs real target, brand lookalike / homoglyph domains, URL shorteners, credential (password) forms, remote templates, risky attachments (double extensions, executables), lure wording (urgency, account suspension, invoices, gift cards/crypto…) plus an LLM read of the text; scored 0–100 with weighted signals
+- **Text-as-image lures are caught** — image-only PDFs and pictures embedded in e-mails/documents (inline `cid:` images, image attachments, HTML `data:` URIs, OOXML media) are OCR'd (tesseract, or the vision LLM as fallback); tracking pixels are ignored
+- **QR codes** in images and PDF pages are decoded (zbarimg) — QR phishing ("quishing") raises the score
+- **Network artifacts** — validated URLs / domains / IPs from ASCII + UTF-16 + FLOSS strings, classified as benign infrastructure (CRL/OCSP, schemas, vendor hosts — filtered out), abused services (paste sites, tunnels, file hosting) or unknown; network-capable imports (download-to-file, sockets, recon APIs) listed; code identifiers such as `System.SysUtils` are not mistaken for domains
+- **Domain age** via RDAP (whois fallback) for embedded, sender and link domains — newly registered or unregistered domains raise the score. Only domain names leave the server, never the sample (`MALHAUS_DOMAIN_AGE_LOOKUP=0` for air-gapped hosts)
+
+### Verdict engine
+
+- **Preflight**: mandatory tools for the detected file type always run first; supplementary tools are offered to the LLM, filtered by file type and by what is actually installed
+- **Deterministic heuristic score** — entropy, IOC-shaped and encoded strings, embedded payloads, network signals, PE compile timestamps in the future, `/Brepro` reproducible builds, unsigned binaries claiming Microsoft authorship, self-signed certificates, version-info company vs Authenticode signer mismatch, catalog-signed Windows binaries, UPX-packed legitimate software, .NET dropper/RAT patterns, installer and phishing findings
+- **Strings Analyst LLM** — a separate LLM pass scores the extracted strings (assembler noise filtered out)
+- **Tool-calling LLM loop** — the model can run further tools, including on files extracted from the sample (`path` argument); repeated calls force a verdict; a verdict is rejected until the required tools for that type have run
+- **Resilience** — fallback model and recovery verdict from the gathered tool context if the LLM fails mid-loop; Azure/OpenAI content-filter hits are retried with a metadata-only call (and treated as a malicious signal); robust JSON parsing of verdicts
+- **Output**: `benign` / `suspicious` / `likely_malware` with confidence, top reasons, IOCs, heuristic + strings scores, the tools used for the verdict, full tool output, and (optionally) the LLM debug trace
+- All CLI tools run sandboxed with **firejail** (no network, read-only filesystem, private /tmp) when available
+
+### Platform
+
+- Supports **Gemini, OpenAI, Azure AI Foundry (API key or Entra ID / RBAC), Claude (direct or via Azure), DeepSeek**, and any OpenAI-compatible server (Ollama, vLLM, LM Studio)
+- **Web UI** — file upload or URL, archive password, Ghidra toggle, live progress log (SSE), recent analyses, captcha gate, per-IP hourly limit and global concurrency limit; the running git commit is shown in the header
+- **Reports** — HTML report per SHA-256 plus raw JSON at `/report/<sha256>/json`; results are **cached by SHA-256**, so re-submitting a file is instant
+- **REST API** (`/api/v1`) — async jobs, two-step staged upload, SHA-256 lookup, Bearer API keys with per-key rate limits and expiry, optional visualizations as base64 PNGs; Python client example on `/api-docs`
+- **MCP server** — AI agents (Claude, Cursor, Continue…) call `analyze_file`, `analyze_url` and `analyze_sha256` over Streamable HTTP, proxied by nginx on 443
+- **Admin dashboard** (`/admin`) — create / revoke API keys (label, rate limit, expiry), delete analyses, change password; captcha + brute-force lockout, session timeout, CSRF protection
+- **Mathematical analysis visualizations** — entropy profile, compression curve, bigram matrix, and a 3D byte-trigram point cloud with HDBSCAN density clustering (see below)
+- Optional **Ghidra** headless decompilation (PE/ELF, also on PEs extracted from MSI/archives)
+- Deploy with **Docker** (nginx + gunicorn) or bare metal
 
 ### Mathematical analysis
 
@@ -130,9 +156,15 @@ The pipeline runs mandatory tools automatically in preflight (every submission) 
 | `p7zip` | Mandatory | Archive extraction | ZIP, 7z, RAR… |
 | `firejail` | Mandatory | Sandbox wrapper for CLI tools | All |
 | `nodejs` / `js-beautify` | Mandatory | JavaScript deobfuscation | JS |
+| `upx` | Mandatory | Unpack UPX-compressed binaries before analysis | PE, ELF |
+| `mupdf-tools` | Mandatory | PDF text layer, link extraction, page rendering for OCR | PDF |
+| `tesseract-ocr` | Optional | OCR of image-only PDFs and embedded images (vision LLM is used when missing) | PDF, e-mail, Office |
+| `zbar-tools` | Optional | QR-code decoding in images and PDF pages | PDF, e-mail, Office |
+| `whois` | Optional | Domain-age fallback when RDAP has no answer | All |
+| `innoextract` | Optional | Inno Setup installer unpacking | PE installers |
 | `ssdeep` | Supplementary | Fuzzy hashing — find similar files across malware families | All |
 | `exiftool` | Supplementary | Metadata extraction | LNK |
-| `openjdk-21` *(Docker)* | Optional | Required by Ghidra headless | PE, ELF |
+| `openjdk-21` *(Docker)* | Optional | `jarsigner` / `javap` for Java archives; required by Ghidra headless | JAR/WAR/EAR, PE, ELF |
 
 ### Python libraries (pip)
 
@@ -142,6 +174,9 @@ The pipeline runs mandatory tools automatically in preflight (every submission) 
 | `flare-floss` | Mandatory | Deobfuscated string extraction (stack strings, encoded strings) | PE, ELF |
 | `pefile` | Mandatory | PE header/section/import parsing | PE |
 | `dnfile` | Mandatory | .NET metadata analysis — type refs, Assembly.Load, embedded resources, obfuscation | .NET PE |
+| `LnkParse3` | Mandatory | Windows shortcut parsing | LNK |
+| `olefile` | Mandatory | Outlook `.msg` parsing | E-mail |
+| `Pillow` | Mandatory | Image normalisation for OCR / QR decoding | PDF, e-mail, Office |
 
 ### Didier Stevens tools (downloaded at build time)
 
@@ -205,8 +240,8 @@ Ghidra headless decompilation adds a deeper static analysis pass for PE and ELF 
 - **Web UI:** check the **Use Ghidra** checkbox before submitting.
 - **REST API:** pass `use_ghidra=1` as a form field:
   ```bash
-  curl -X POST https://your-server/api/v1/upload \
-    -H "X-API-Key: YOUR_KEY" \
+  curl -X POST https://your-server/api/v1/analyze \
+    -H "Authorization: Bearer mh_YOUR_KEY" \
     -F "file=@sample.exe" \
     -F "use_ghidra=1"
   ```
