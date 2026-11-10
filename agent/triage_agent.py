@@ -62,6 +62,10 @@ def build_mandatory_snips(pre: Dict[str, Any]) -> Dict[str, str]:
         snips["network_artifacts"] = _snip_stdout(pre.get("mandatory_network_artifacts"), 3000)
     if pre.get("mandatory_installer_extract"):
         snips["installer_extract"] = _snip_stdout(pre.get("mandatory_installer_extract"), 5000)
+    if (pre.get("mandatory_subcomponents") or {}).get("items"):
+        snips["subcomponents"] = _snip_stdout(pre.get("mandatory_subcomponents"), 6000)
+        from agent.subcomponents import llm_details
+        snips["subcomponent_tool_outputs"] = llm_details(pre["mandatory_subcomponents"])
     if pre.get("mandatory_phishing_analysis"):
         snips["phishing_analysis"] = _snip_stdout(pre.get("mandatory_phishing_analysis"), 4000)
     if pre.get("mandatory_email_parse"):
@@ -237,6 +241,15 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
             "analysis_seconds": round(time.time() - _t0, 1),
         }
 
+    # Recursive analysis of inner files (installer payloads, archive members, attachments, embedded objects)
+    try:
+        from agent.subcomponents import analyze_subcomponents
+        subs = analyze_subcomponents(pre, sample, options=options or {}, progress_cb=cb)
+        if subs.get("items"):
+            pre["mandatory_subcomponents"] = subs
+    except Exception as _e:  # noqa: BLE001
+        pre["mandatory_subcomponents"] = {"ok": False, "error": f"{type(_e).__name__}: {_e}", "stdout": "", "items": []}
+
     cb("LLM: strings analysis")
     strings_input = pre.get("strings_preview", "") or ""
     # For office files, raw strings from the binary are mostly hex-encoded OLE data
@@ -300,6 +313,9 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
     evidence_pack = build_evidence_pack(pre, options=options or {})
     cb("Heuristic scoring")
     heuristics = heuristic_score_from_evidence(evidence_pack, strings_llm)
+    if (pre.get("mandatory_subcomponents") or {}).get("items"):
+        from agent.subcomponents import apply_to_heuristics
+        heuristics = apply_to_heuristics(heuristics, pre["mandatory_subcomponents"])
     mandatory_snips = build_mandatory_snips(pre)
 
     cb("LLM: verdict loop")
@@ -417,6 +433,11 @@ def analyze(sample: str, options: Dict[str, Any] | None = None, progress_cb=None
 
     cb("Finalizing verdict")
     verdict = enforce_verdict(verdict_raw, evidence_pack, heuristics, pre, strings_llm=strings_llm)
+
+    # Report/JSON: append every sub-component's tool output to the same tool's section of the parent
+    if (pre.get("mandatory_subcomponents") or {}).get("items"):
+        from agent.subcomponents import merge_into_preflight
+        pre["mandatory_subcomponents"]["added_sections"] = merge_into_preflight(pre, pre["mandatory_subcomponents"])
 
     cb("Generating byte heatmap")
     heatmap = byte_heatmap(tool_sample)

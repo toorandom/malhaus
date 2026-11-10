@@ -36,6 +36,7 @@
       {% elif not txt and serr %}
         {% set txt = 'stderr:\n' + serr %}
       {% endif %}
+      {% if '===== sub-component:' in txt %}{% set limit = limit * 20 %}{% endif %}
       <details>
         <summary class="mono">{{ title }}{% if txt and (txt|length) > limit %} <span class="muted">(truncated)</span>{% endif %}</summary>
         <div class="codebox"><pre class="mono break">{{ (txt[:limit] if txt else 'Not collected.') }}</pre></div>
@@ -234,6 +235,48 @@
         <summary class="mono muted">Extracted text ({{ ph.get('text_method') }})</summary>
         <div class="codebox"><pre class="mono break">{{ ph.get('document_text')[:8000] }}</pre></div>
       </details>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% set sc = p.get('mandatory_subcomponents') or {} %}
+    {% if sc.get('items') %}
+    <section class="card">
+      <div class="row">
+        <h2>Sub-components</h2>
+        <div class="row-right">
+          {% set ws = sc.get('max_score', 0) %}
+          <span class="badge big {{ 'likely_malware' if ws >= 70 else ('suspicious' if ws >= 40 else 'benign') }}">worst {{ ws }}/100</span>
+        </div>
+      </div>
+      <div class="muted mono" style="font-size:11px;">
+        {{ sc.get('analyzed', 0) }} inner file(s) analysed with the same preflight tools
+        {% set sk = sc.get('skipped') or {} %}
+        {% if sk.get('limit') %} · <span style="color:var(--warn,#e67e22)">{{ sk.get('limit') }} not analysed (limit)</span>{% endif %}
+        {% if sk.get('unsupported') %} · {{ sk.get('unsupported') }} unsupported{% endif %}
+        {% if sk.get('duplicate') %} · {{ sk.get('duplicate') }} duplicate{% endif %}
+      </div>
+      <div style="overflow-x:auto;margin-top:6px;">
+        <table class="netart">
+          <tr><th>score</th><th>path inside the object</th><th>type</th><th>reasons</th></tr>
+          {% for n in sc.get('items')|sort(attribute='score', reverse=True) %}
+          <tr>
+            <td class="mono"><span class="netcls {{ 'new' if n.score >= 70 else ('unknown' if n.score >= 40 else 'old') }}">{{ n.score }}</span></td>
+            <td class="mono val">{{ n.chain }}{% if n.signed_verified %} <span class="pill mono" style="font-size:10px;">signed ✓</span>{% endif %}
+              <div class="muted" style="font-size:10px;">sha256 {{ n.sha256 }} · {{ n.size }} B</div></td>
+            <td class="mono muted">{{ n.kind }}</td>
+            <td style="font-size:12px;">{% for r in (n.reasons or [])[:3] %}<div>{{ r }}</div>{% endfor %}{% if n.network %}<div class="muted">{{ n.network }}</div>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px;">Each tool section below also contains the same tool's output for every sub-component, under "===== sub-component: …" headers.</div>
+      {% if sc.get('added_sections') %}
+      <h3>Tools that ran only on sub-components</h3>
+      {% for k in sc.get('added_sections') %}
+        {% set v = p.get(k) %}
+        {{ show_block(k|replace('mandatory_', '')|replace('_', ' '), {'stdout': v} if v is string else v) }}
+      {% endfor %}
       {% endif %}
     </section>
     {% endif %}

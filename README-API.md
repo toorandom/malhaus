@@ -486,3 +486,8 @@ if result.get("takens2d") and result["takens2d"].get("b64"):
   `cid:` parts, image attachments, HTML `data:` URIs, OOXML media) are OCR'd and QR-decoded too; `image_ocr` lists
   each one (`name`, `source`, `width`, `height`, `method`, `text`, `qr`) and their text is scored with the body.
   Limits: `MALHAUS_IMAGE_OCR_MAX` (default 12) and `MALHAUS_IMAGE_OCR_VISION_MAX` (default 6).
+- Sub-components — no new fields: inner files (installer payloads, archive members, attachments, embedded
+  objects, nested containers) are analysed with the same tools. `tool_outputs.mandatory_subcomponents.stdout`
+  lists each one (path inside the object, type, score, reasons, path on disk); every other `tool_outputs.<tool>.stdout`
+  also carries that tool's output for each inner file after a `===== sub-component: <outer ▸ inner> (<type>) =====`
+  header, so parse a tool's own section up to the first such header. Sub-component findings appear in `top_reasons`.

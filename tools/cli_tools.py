@@ -479,8 +479,247 @@ def network_artifacts(path: str) -> Dict[str, Any]:
 
 # ---------------- INSTALLERS (Inno Setup / NSIS) ----------------
 
-# innoextract 1.9 (latest release, also what apt ships) understands setup data up to 6.0.5
+# innoextract 1.9 (latest release, also what apt ships) understands setup data up to 6.0.5.
+# The real ceiling is probed from `innoextract --version`; MALHAUS_INNOEXTRACT_MAX_VERSION overrides it.
 INNOEXTRACT_MAX_VERSION = (6, 0, 5)
+_INNO_LDR_ID = b"rDlPtS\xcd\xe6\xd7\x7b\x0b\x2a"   # SetupLdrOffsetTable ID
+_INNO_CHUNK_ID = b"zlb\x1a"                      # compressed file-data chunk
+
+def _parse_version(s: str) -> Optional[tuple]:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", s or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+_IE_PROBE: Dict[str, Optional[tuple]] = {}
+_RE_CALL_OP = re.compile(rb"[\xe8\xe9]")
+
+def _innoextract_max(binary: str) -> tuple:
+    """Highest Inno Setup version a given innoextract build supports ("... Inno Setup 1.2.10 to 6.0.5")."""
+    env = _parse_version(os.environ.get("MALHAUS_INNOEXTRACT_MAX_VERSION", ""))
+    if env:
+        return env
+    if binary not in _IE_PROBE:
+        out = run([binary, "--version"], timeout=10, max_bytes=20000)
+        m = re.search(r"to\s+(\d+\.\d+\.\d+)", (out.get("stdout", "") + out.get("stderr", "")))
+        _IE_PROBE[binary] = _parse_version(m.group(1)) if m else None
+    return _IE_PROBE[binary] or INNOEXTRACT_MAX_VERSION
+
+def _inno_transform_calls(buf: bytes) -> bytes:
+    """Undo Inno Setup's CALL/JMP address filter ([Version 3], applied to x86/x64 executables before
+    compression): per 64 KiB block, E8/E9 followed by a 32-bit operand whose high byte is 00/FF had its
+    low 24 bits made absolute. Inverse of TransformCallInstructions(Encode=False)."""
+    p = bytearray(buf)
+    n = len(p)
+    find = _RE_CALL_OP.search
+    for blk in range(0, n, 0x10000):
+        end = min(blk + 0x10000, n) - 4
+        i = blk
+        while i < end:
+            m = find(p, i, end)
+            if not m:
+                break
+            i = m.start() + 1
+            if p[i + 3] == 0x00 or p[i + 3] == 0xFF:
+                addr = (i + 4) & 0xFFFFFF  # AddrOffset (= blk) + offset in block + 4 == file offset + 4
+                rel = (p[i] | (p[i + 1] << 8) | (p[i + 2] << 16)) - addr
+                if rel & 0x800000:
+                    p[i + 3] ^= 0xFF
+                p[i], p[i + 1], p[i + 2] = rel & 0xFF, (rel >> 8) & 0xFF, (rel >> 16) & 0xFF
+            i += 4
+    return bytes(p)
+
+def _inno_offsets(data: bytes) -> Dict[str, int]:
+    """Setup loader offset table: revision 1 (32-bit fields) or 2 (6.5+/7.x: 64-bit offsets)."""
+    import struct
+    o = data.find(_INNO_LDR_ID)
+    if o < 0:
+        return {}
+    rev = struct.unpack_from("<I", data, o + 12)[0]
+    try:
+        if rev == 1:
+            total, off_exe, _usz, _crc, off0, off1 = struct.unpack_from("<IIIiII", data, o + 16)
+        elif rev == 2:
+            total, off_exe, _usz, _crc, off0, off1 = struct.unpack_from("<qqIiqq", data, o + 16)
+        else:
+            return {"revision": rev}
+    except struct.error:
+        return {}
+    return {"revision": rev, "offset0": off0, "offset1": off1, "total": total}
+
+def _inno_decompress_chunk(data: bytes, pos: int, cap: int) -> tuple:
+    """Decompress one zlb chunk at data[pos] (magic included). Inno stores LZMA2 (1-byte dict prop),
+    LZMA1 (5-byte props), zlib or bzip2 behind the magic. Returns (bytes, method, compressed_len)."""
+    import lzma, zlib as _zlib, bz2
+    body_start = pos + 4
+    b0 = data[body_start] if body_start < len(data) else 0xFF
+
+    def _lzma(filters, skip):
+        dec = lzma.LZMADecompressor(lzma.FORMAT_RAW, filters=filters)
+        out = bytearray()
+        i = body_start + skip
+        while i < len(data) and not dec.eof and len(out) < cap:
+            piece = data[i:i + (1 << 20)]
+            try:
+                out += dec.decompress(piece, max_length=cap - len(out))
+            except lzma.LZMAError:
+                break  # trailing garbage / truncated stream: keep what decoded
+            i += len(piece)
+            while not dec.eof and not dec.needs_input and len(out) < cap:
+                out += dec.decompress(b"", max_length=cap - len(out))
+        used = (i - len(dec.unused_data)) if dec.eof else i
+        return bytes(out), used - pos
+
+    attempts = []
+    if b0 <= 40:
+        dsz = (2 | (b0 & 1)) << (b0 // 2 + 11)
+        attempts.append(("lzma2", lambda: _lzma([{"id": lzma.FILTER_LZMA2, "dict_size": dsz}], 1)))
+    if b0 < 225:
+        lc, r = b0 % 9, b0 // 9
+        lp, pb = r % 5, r // 5
+        dsz = int.from_bytes(data[body_start + 1:body_start + 5], "little")
+        if lc + lp <= 4 and 4096 <= dsz <= (1 << 30):
+            attempts.append(("lzma1", lambda: _lzma([{"id": lzma.FILTER_LZMA1, "dict_size": dsz,
+                                                      "lc": lc, "lp": lp, "pb": pb}], 5)))
+    if data[body_start:body_start + 1] == b"\x78":
+        def _z():
+            d = _zlib.decompressobj()
+            out = d.decompress(data[body_start:body_start + cap], cap)
+            return out, len(data[body_start:body_start + cap]) - len(d.unused_data) + 4
+        attempts.append(("zlib", _z))
+    if data[body_start:body_start + 3] == b"BZh":
+        def _bz():
+            d = bz2.BZ2Decompressor()
+            out = d.decompress(data[body_start:body_start + cap], cap)
+            return out, len(data[body_start:body_start + cap]) - len(d.unused_data) + 4
+        attempts.append(("bzip2", _bz))
+    for name, fn in attempts:
+        try:
+            out, used = fn()
+        except Exception:  # noqa: BLE001
+            continue
+        if len(out) >= 64:
+            return out, name, used
+    return b"", "", 0
+
+def _carve_pes(stream: bytes) -> List[Dict[str, Any]]:
+    """PE files inside a decompressed Inno chunk (files are stored back to back). Executables get the
+    call filter undone; the variant whose PE checksum verifies wins (else filtered for x86/x64)."""
+    import struct
+    found, pos = [], 0
+    while len(found) < 200:
+        s = stream.find(b"MZ", pos)
+        if s < 0:
+            break
+        pos = s + 2
+        try:
+            lf = struct.unpack_from("<I", stream, s + 0x3C)[0]
+            if not (0x40 <= lf <= 0x1000) or stream[s + lf:s + lf + 4] != b"PE\x00\x00":
+                continue
+            machine = struct.unpack_from("<H", stream, s + lf + 4)[0]
+        except struct.error:
+            continue
+        # Image size from the section table / certificate table (header bytes are left intact by the
+        # filter in practice; the filtered header is re-checked below)
+        head = stream[s:s + 0x2000]
+        try:
+            hp = pefile.PE(data=_inno_transform_calls(head) if machine in (0x14C, 0x8664) else head, fast_load=True)
+            size = max((sec.PointerToRawData + sec.SizeOfRawData for sec in hp.sections), default=0)
+            sd = hp.OPTIONAL_HEADER.DATA_DIRECTORY[4]
+            if sd.VirtualAddress and sd.Size and sd.VirtualAddress + sd.Size > size:
+                size = sd.VirtualAddress + sd.Size
+        except Exception:  # noqa: BLE001
+            continue
+        if not (0x200 <= size <= 200_000_000) or s + size > len(stream):
+            continue
+        window = stream[s:s + size]
+        variants = [("filtered", _inno_transform_calls(window))] if machine in (0x14C, 0x8664) else []
+        variants.append(("raw", window))
+        best = None
+        for label, buf in variants:
+            try:
+                pe = pefile.PE(data=buf, fast_load=True)
+                end = max((sec.PointerToRawData + sec.SizeOfRawData for sec in pe.sections), default=0)
+                sd = pe.OPTIONAL_HEADER.DATA_DIRECTORY[4]  # certificate table: file offset
+                if sd.VirtualAddress and sd.Size and sd.VirtualAddress + sd.Size > end:
+                    end = sd.VirtualAddress + sd.Size
+                if end < 0x200 or end > len(buf):
+                    continue
+                img = buf[:end]
+                pe2 = pefile.PE(data=img, fast_load=True)
+                ok_sum = bool(pe2.OPTIONAL_HEADER.CheckSum) and pe2.generate_checksum() == pe2.OPTIONAL_HEADER.CheckSum
+                cand = (ok_sum, label, img, pe2)
+                if best is None or (ok_sum and not best[0]):
+                    best = cand
+                if ok_sum:
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if not best:
+            continue
+        ok_sum, label, img, pe2 = best
+        name = ""
+        try:
+            pe2.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+            for fi in getattr(pe2, "FileInfo", []) or []:
+                for entry in fi:
+                    for st in getattr(entry, "StringTable", []) or []:
+                        v = st.entries.get(b"OriginalFilename") or st.entries.get(b"InternalName")
+                        if v and not name:
+                            name = v.decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            pass
+        is_dll = bool(pe2.FILE_HEADER.Characteristics & 0x2000)
+        found.append({"offset": s, "data": img, "machine": machine, "filter": label,
+                      "checksum_ok": ok_sum, "name": name, "ext": ".dll" if is_dll else ".exe"})
+        pos = s + len(img)
+    return found
+
+def _inno_builtin_extract(path: str, outdir: Path, notes: List[str]) -> int:
+    """Recover the payload of Inno Setup installers innoextract cannot read (6.1+ / 7.x): decompress the
+    zlb file-data chunks, carve the PE files (call filter undone, PE checksum verified) and keep the
+    whole decompressed stream for strings / network scans. File names come from version info."""
+    data = Path(path).read_bytes()
+    cap = int(os.environ.get("MALHAUS_INNO_MAX_UNPACK_MB", "512")) * 1024 * 1024
+    offs = _inno_offsets(data)
+    if offs.get("revision") not in (None, 1, 2):
+        notes.append(f"unknown setup loader revision {offs['revision']}; scanning for data chunks")
+    if offs.get("offset1") == 0:
+        notes.append("installer uses external setup-*.bin disk slices (DiskSpanning); payload not embedded")
+    start = offs.get("offset1") or 0
+    if start and data[start:start + 4] != _INNO_CHUNK_ID:
+        start = 0
+    carve_dir = outdir / "inno_carved"
+    carve_dir.mkdir(parents=True, exist_ok=True)
+    recovered, total_out, pos, n_chunk = 0, 0, start, 0
+    while total_out < cap and n_chunk < 500:
+        c = data.find(_INNO_CHUNK_ID, pos)
+        if c < 0:
+            break
+        out, method, used = _inno_decompress_chunk(data, c, cap - total_out)
+        if not out:
+            pos = c + 4
+            continue
+        n_chunk += 1
+        total_out += len(out)
+        (carve_dir / f"chunk{n_chunk:03d}_{method}.bin").write_bytes(out)
+        recovered += 1
+        names_seen: Dict[str, int] = {}
+        for pe_f in _carve_pes(out):
+            base = re.sub(r"[^A-Za-z0-9._-]", "_", pe_f["name"])[:80] or f"carved_{pe_f['offset']:08x}{pe_f['ext']}"
+            if not base.lower().endswith((".exe", ".dll", ".sys", ".ocx", ".cpl", ".scr", ".efi")):
+                base += pe_f["ext"]
+            names_seen[base] = names_seen.get(base, 0) + 1
+            if names_seen[base] > 1:
+                stem, ext = os.path.splitext(base)
+                base = f"{stem}_{names_seen[base]}{ext}"
+            (carve_dir / base).write_bytes(pe_f["data"])
+            recovered += 1
+        notes.append(f"chunk {n_chunk} @0x{c:x}: {method}, {len(out)} bytes decompressed")
+        pos = c + max(used, 4)
+    if recovered:
+        notes.append("payload recovered by the built-in Inno decoder: PE files carved from the decompressed "
+                     "stream (names from version info; install paths unavailable for this setup version), "
+                     "chunk*.bin = full decompressed file data")
+    return recovered
 
 def detect_installer(path: str) -> Dict[str, Any]:
     """Cheap signature check: Inno Setup (setup data header) or NSIS (Nullsoft first-header magic)."""
@@ -489,7 +728,9 @@ def detect_installer(path: str) -> Dict[str, Any]:
     except OSError:
         return {}
     m = re.search(rb"Inno Setup Setup Data \((\d+)\.(\d+)\.(\d+)\)", data)
-    if m:
+    # the Inno runtime stub (Setup.e32 / SetupLdr.e32 shipped as a file) contains the ID string as a constant;
+    # a real installer also has the setup loader offset table (or the pre-5.1.5 "Inno" header at 0x30)
+    if m and (b"rDlPtS" in data or data[0x30:0x34] == b"Inno"):
         return {"type": "inno", "version": ".".join(x.decode() for x in m.groups()),
                 "version_tuple": tuple(int(x) for x in m.groups())}
     if b"\xef\xbe\xad\xdeNullsoftInst" in data or b"\xef\xbe\xad\xdeNullSoftInst" in data:
@@ -497,8 +738,12 @@ def detect_installer(path: str) -> Dict[str, Any]:
     return {}
 
 def _innoextract_bin() -> Optional[str]:
-    local = TOOLS_DIR / "innoextract"
-    return which("innoextract") or (str(local) if local.exists() else None)
+    """innoextract build supporting the newest Inno version: MALHAUS_INNOEXTRACT, tools/innoextract,
+    /usr/local/bin (custom builds) or PATH."""
+    cands = [os.environ.get("MALHAUS_INNOEXTRACT", ""), str(TOOLS_DIR / "innoextract"),
+             "/usr/local/bin/innoextract", which("innoextract") or ""]
+    found = [c for c in dict.fromkeys(cands) if c and Path(c).is_file() and os.access(c, os.X_OK)]
+    return max(found, key=_innoextract_max) if found else None
 
 @tool
 def installer_extract(path: str) -> Dict[str, Any]:
@@ -512,24 +757,49 @@ def installer_extract(path: str) -> Dict[str, Any]:
     res: Dict[str, Any] = {"ok": False, "installer": det["type"], "version": det.get("version", ""),
                            "extract_dir": str(outdir), "files": []}
     if det["type"] == "inno":
+        notes: List[str] = []
         ie = _innoextract_bin()
-        if det["version_tuple"] > INNOEXTRACT_MAX_VERSION:
-            res["error"] = (f"Inno Setup {det['version']} is newer than innoextract supports "
-                            f"(<= {'.'.join(map(str, INNOEXTRACT_MAX_VERSION))}); payload not unpacked")
-        elif not ie:
-            res["error"] = "innoextract not installed (apt install innoextract)"
+        ie_max = _innoextract_max(ie) if ie else INNOEXTRACT_MAX_VERSION
+        ie_dir = outdir / "innoextract"
+        if not ie:
+            notes.append("innoextract not installed")
+        elif det["version_tuple"] > ie_max:
+            notes.append(f"Inno Setup {det['version']} is newer than innoextract supports (<= {'.'.join(map(str, ie_max))})")
         else:
-            r = run_jailed([ie, "-e", "-q", "-d", str(outdir), path], path, timeout=180, max_bytes=200000)
-            res["tool_output"] = (r.get("stdout", "") + r.get("stderr", ""))[-3000:]
-            if not r.get("ok"):
-                res["error"] = "innoextract failed: " + (r.get("stderr", "") or "")[-500:]
+            ie_dir.mkdir(parents=True, exist_ok=True)
+            r = run_jailed([ie, "-e", "-q", "-d", str(ie_dir), path], path, timeout=180, max_bytes=200000)
+            notes.append("innoextract: " + (r.get("stdout", "") + r.get("stderr", "")).strip()[-1500:])
+        if not any(f.is_file() for f in ie_dir.rglob("*")) if ie_dir.exists() else True:
+            # 1) built-in decoder (zlb chunks -> carved PEs), works for 6.1+ / 7.x
+            try:
+                got = _inno_builtin_extract(path, outdir, notes)
+            except Exception as e:  # noqa: BLE001
+                got = 0
+                notes.append(f"built-in Inno decoder failed: {type(e).__name__}: {e}")
+            # 2) last resort: 7z opens the PE; only the zlb blob it yields is payload, the rest is
+            #    sections/resources of the stub — decode the blob, never report the stub parts as payload
+            if not got:
+                raw7 = _work_dir(path, "inno7z")
+                run_jailed(["7z", "x", "-y", "-bd", f"-o{raw7}", path], path, timeout=180, max_bytes=20000)
+                for blob in [f for f in raw7.rglob("*") if f.is_file()]:
+                    with open(blob, "rb") as fh:
+                        if fh.read(4) == _INNO_CHUNK_ID:
+                            got += _inno_builtin_extract(str(blob), outdir, notes)
+                if not got:
+                    notes.append("7z fallback: only stub sections/resources, no payload chunk recovered")
+            if not got:
+                res["error"] = (f"Inno Setup {det['version']}: payload not unpacked (innoextract unsupported/failed, "
+                                "built-in decoder and 7z found no decodable data chunk) — the installed files were "
+                                "NOT examined; dynamic analysis (detonation) recommended")
+        res["tool_output"] = "\n".join(notes)[-3000:]
     else:
         r = run_jailed(["7z", "x", "-y", "-bd", f"-o{outdir}", path], path, timeout=180, max_bytes=200000)
         res["tool_output"] = (r.get("stdout", "") + r.get("stderr", ""))[-3000:]
         if not r.get("ok"):
             res["error"] = "7z NSIS extraction failed: " + (r.get("stderr", "") or "")[-500:]
 
-    files = [f for f in sorted(outdir.rglob("*")) if f.is_file()][:300]
+    files = [f for f in sorted(outdir.rglob("*")) if f.is_file()
+             and (det["type"] != "inno" or not f.relative_to(outdir).parts[0].startswith("inno7z"))][:300]
     for f in files:
         size = f.stat().st_size
         data = f.read_bytes() if size <= 20_000_000 else b""
@@ -549,6 +819,8 @@ def installer_extract(path: str) -> Dict[str, Any]:
     lines = [f"{det['type']} installer {det.get('version', '')}".strip() + f" — {len(res['files'])} file(s) extracted to {outdir}"]
     if res.get("error"):
         lines.append(f"! {res['error']}")
+    if det["type"] == "inno" and res.get("tool_output"):
+        lines += ["  " + l for l in res["tool_output"].splitlines()[:20]]
     for f in res["files"][:120]:
         lines.append(f"  {f['kind']:<14} {f['size']:>10}  H={f['entropy']}  {f['name']}  path={f['path']}")
     if res.get("install_script"):
@@ -2153,6 +2425,7 @@ def _archive_extract_impl(path: str, password: str = "", _depth: int = 0, _max_d
         "extract_rc": extract_result.get("rc"),
         "password_used": bool(password),
         "nesting_depth": _depth,
+        "extract_dir": str(outdir),
         "file_count": len(all_files),
         "files": all_files[:50],
         "pe_count": len(pe_candidates),

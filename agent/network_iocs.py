@@ -48,10 +48,11 @@ _BENIGN_INFRA_SUFFIXES = (
     "digicert.com", "verisign.com", "symantec.com", "symcb.com", "symcd.com", "thawte.com",
     "geotrust.com", "sectigo.com", "comodoca.com", "comodo.com", "usertrust.com", "globalsign.com",
     "globalsign.net", "godaddy.com", "starfieldtech.com", "entrust.net", "letsencrypt.org",
-    "identrust.com", "certum.pl", "ssl.com", "amazontrust.com", "pki.goog",
+    "identrust.com", "certum.pl", "certum.eu", "ocsp-certum.com", "ssl.com", "amazontrust.com", "pki.goog",
+    "entrust.com", "buypass.com", "quovadisglobal.com", "trustwave.com", "harica.gr", "certigna.fr",
     "microsoft.com", "windows.com", "windowsupdate.com", "msftconnecttest.com",
     "w3.org", "xmlsoap.org", "openxmlformats.org", "purl.org", "ns.adobe.com", "apache.org",
-    "jrsoftware.org", "embarcadero.com", "borland.com", "gnu.org", "openssl.org", "mozilla.org",
+    "jrsoftware.org", "innosetup.com", "remobjects.com", "embarcadero.com", "borland.com", "gnu.org", "openssl.org", "mozilla.org",
     "nsis.sf.net", "nsis.sourceforge.io", "oracle.com", "java.com", "sun.com", "eclipse.org",
     "schemas.android.com", "unicode.org", "python.org", "qt.io", "example.com", "example.org", "example.net",
 )
@@ -134,6 +135,9 @@ def is_plausible_domain(d: str, from_url: bool = False) -> bool:
         return False
     if from_url:
         return True
+    # MIME vendor tree (application/vnd.dece.zip, vnd.ahead.space): not hostnames, even on real TLDs
+    if labels[0].lower() == "vnd":
+        return False
     # Code identifiers are mixed-case (System.IO, Vcl.Forms); hostnames in
     # binaries are almost always lowercase (or fully uppercase).
     if not (d.islower() or d.isupper()):

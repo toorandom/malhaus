@@ -123,6 +123,12 @@ def enforce_verdict(
     # --- BENIGN GUARD: don't let heuristics override a verified-signed PE with no real IOCs/payloads ---
     kind = preflight.get("kind", verdict.get("file_type", "unknown"))
     verified = (kind == "pe") and _authenticode_verified(preflight)
+    # A valid signature on the container says nothing about what it drops: no benign guard when a
+    # sub-component (installer payload, archive member, attachment...) is itself suspicious
+    _subs = preflight.get("mandatory_subcomponents") or {}
+    _worst_sub = max(_subs.get("items") or [], key=lambda n: n.get("score", 0), default=None)
+    if _worst_sub and _worst_sub.get("score", 0) >= 40:
+        verified = False
 
     # "real IOCs" exclude file_paths; only network/identity artifacts
     has_real_ioc = any(len(iocs.get(k, [])) > 0 for k in ["urls","domains","ips","emails"])
@@ -176,6 +182,27 @@ def enforce_verdict(
         if floor and cur in order and order.index(cur) < order.index(floor):
             verdict["risk_level"] = floor
             reasons.insert(0, f"Escalated to {floor}: phishing score {ph['score']}/100.")
+
+    # Sub-components: the container is at least as bad as the worst file inside it
+    if _worst_sub:
+        ws = int(_worst_sub.get("score", 0))
+        line = (f"Sub-components: {_subs.get('analyzed', 0)} inner file(s) analysed; worst {_worst_sub['chain']} "
+                f"scored {ws}/100 ({_worst_sub.get('risk_hint')})")
+        if ws >= 40:
+            reasons.insert(0, line + (": " + "; ".join(str(r) for r in _worst_sub.get("reasons", [])[:2])
+                                      if _worst_sub.get("reasons") else ""))
+        else:
+            reasons.append(line + " — no inner file flagged")
+        # Only strong deterministic evidence overrides the LLM (which saw every sub-component's tools and
+        # scores): >=70 lifts benign/unknown to suspicious; the heuristic rule above already lifts
+        # suspicious -> likely_malware because the parent heuristic score includes the worst child.
+        cur = verdict.get("risk_level", "unknown")
+        if ws >= 70 and cur in ("benign", "unknown"):
+            verdict["risk_level"] = "suspicious"
+            reasons.insert(0, f"Escalated to suspicious: sub-component {_worst_sub['chain']} scored {ws}/100.")
+    if _subs.get("skipped", {}).get("limit"):
+        reasons.append(f"Coverage gap: {_subs['skipped']['limit']} inner file(s) not analysed (sub-component limit) — "
+                       "they were NOT examined.")
 
     # Network artifacts always get their own reason, naming the values (or saying none were found)
     na_summary = (verdict.get("network_artifacts") or {}).get("summary")

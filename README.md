@@ -25,7 +25,7 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 | E-mail | `.eml`, Outlook `.msg` | From / display name / Reply-To / Return-Path, SPF/DKIM/DMARC, Received chain, body links, attachments saved and analysed with the right tool |
 | Scripts | PowerShell, VBS/VBE, HTA, JavaScript, shell/batch, **Perl/CGI, Python, Ruby, PHP, JSP/ASP web shells** | Content review, JS beautify, embedded base64 payload extraction; detected by shebang / `<?php` / `<%` markers / extension / `file(1)`, also without an extension |
 | Shortcuts | Windows `.lnk` | LnkParse3, exiftool, LECmd (when installed): target, arguments, hidden command lines |
-| Installers | MSI, Inno Setup, NSIS | MSI table/file inventory with entropy; PEs inside get full PE analysis (+ .NET, + Ghidra if enabled); Inno (innoextract) and NSIS (7z) payloads unpacked and the bundled payload inspected, not just the stub |
+| Installers | MSI, Inno Setup (all versions incl. 6.1–7.x), NSIS | MSI table/file inventory with entropy; PEs inside get full PE analysis (+ .NET, + Ghidra if enabled); Inno payloads via innoextract, or — for versions innoextract cannot read (6.1+, 7.x) — a built-in decoder that decompresses the data chunks (LZMA/LZMA2/zlib/bzip2), undoes Inno's call-instruction filter and carves byte-exact PE files (PE checksums verified); NSIS via 7z |
 | Java | JAR / WAR / EAR | Manifest, `jarsigner` verification, class list, `javap` disassembly, inner JARs |
 | Archives | ZIP, 7z, RAR (gzip/tar and further archives nested inside are unpacked too) | **Password-protected** archives (password field in UI/API), decompression-bomb check, the most interesting inner file is **promoted** and analysed (PE > ELF > MSI > Office > script > PDF > LNK); double extensions like `evil.jsp.txt` are seen through |
 | URLs | `http(s)://…` | Downloaded server-side (size-limited) and analysed like an upload |
@@ -37,6 +37,16 @@ Upload a suspicious file or paste a URL — malhaus runs it through a pipeline o
 - **QR codes** in images and PDF pages are decoded (zbarimg) — QR phishing ("quishing") raises the score
 - **Network artifacts** — validated URLs / domains / IPs from ASCII + UTF-16 + FLOSS strings, classified as benign infrastructure (CRL/OCSP, schemas, vendor hosts — filtered out), abused services (paste sites, tunnels, file hosting) or unknown; network-capable imports (download-to-file, sockets, recon APIs) listed; code identifiers such as `System.SysUtils` are not mistaken for domains
 - **Domain age** via RDAP (whois fallback) for embedded, sender and link domains — newly registered or unregistered domains raise the score. Only domain names leave the server, never the sample (`MALHAUS_DOMAIN_AGE_LOOKUP=0` for air-gapped hosts)
+
+### Sub-components (recursive)
+
+Every supported file found **inside** the sample — installer payloads, archive members, MSI contents, e-mail attachments, embedded Office objects, carved payloads — is run through the same preflight tools as a top-level upload and scored; nested containers are followed further (e.g. `setup.exe ▸ payload.zip ▸ dropper.js`).
+
+- Each tool section of the report (radare2, objdump, Authenticode, script content, network artifacts…) also contains that tool's output for every sub-component, under `===== sub-component: <path inside the object> =====` headers; tools that only ran on inner files get their own section
+- A **Sub-components** card lists every inner file with its path inside the object, type, score and reasons
+- The verdict LLM receives the full sub-component summary and tool excerpts, and can call tools on any inner file
+- Scoring: the parent's heuristic score is at least its worst sub-component; an inner file scoring ≥ 70 lifts a benign verdict to suspicious; a valid signature on the container does not clear a malicious inner file, while inner files with a verified signature and no actionable network IOCs are cleared
+- Limits: `MALHAUS_SUBCOMPONENT_DEPTH` (3), `MALHAUS_SUBCOMPONENT_MAX` (20 files), `MALHAUS_SUBCOMPONENT_SECONDS` (300), `MALHAUS_SUBCOMPONENT_LLM` (8 strings-LLM passes); files over the limit are reported as a coverage gap
 
 ### Verdict engine
 
