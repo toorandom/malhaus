@@ -24,7 +24,7 @@ from flask import Blueprint, request, jsonify, url_for
 from webapp.api_auth import verify_bearer, api_rate_check, ensure_api_tables
 from webapp.routes import (
     _acquire_analysis_slot, _release_analysis_slot, _update_analysis_slot,
-    _get_cached_recent, _write_recent, _download_url_to_file,
+    _get_cached_recent, _get_cached_recent_any, analyzed_sha256, _write_recent, _download_url_to_file,
     _sha256_file, UPLOAD_DIR, DB_PATH,
 )
 from tools.cli_tools import detect_file_type
@@ -173,6 +173,7 @@ def _phishing_out(report: dict) -> dict:
 def _build_html_summary(
     risk_level, confidence, file_type, sha256, report_url, report_json_url,
     heuristic_score, top_reasons, strings_score, strings_summary,
+    container_sha256=None, sha256_source="analyzed_file",
 ) -> str:
     risk_color = {
         "malicious": "#c0392b", "suspicious": "#e67e22",
@@ -187,7 +188,13 @@ def _build_html_summary(
         f' &nbsp; <strong>Heuristic score:</strong> {heuristic_score}'
         f' &nbsp; <strong>Strings score:</strong> {strings_score}/100</p>'
         f'<p><strong>File type:</strong> {file_type}</p>'
-        f'<p><strong>SHA-256:</strong> <code>{sha256}</code></p>'
+        + (f'<p><strong>SHA-256 (analysed file):</strong> <code>{sha256}</code><br>'
+           f'<strong>Container SHA-256 (uploaded):</strong> <code>{container_sha256}</code></p>'
+           if container_sha256 and sha256_source == "analyzed_file" else
+           f'<p><strong>SHA-256 (original uploaded file):</strong> <code>{sha256}</code><br>'
+           f'<em>Hash of the promoted inner file that was analysed is not available for this report.</em></p>'
+           if container_sha256 else
+           f'<p><strong>SHA-256:</strong> <code>{sha256}</code></p>') +
         f'<p>'
         f'<a href="{report_url}">HTML report</a>'
         f' &nbsp;|&nbsp; '
@@ -223,9 +230,17 @@ def _build_result(job: dict, include: set[str]) -> dict:
             }
     tools_used = list(tool_outputs.keys())
 
-    sha256_val   = job["sha256"] or ""
+    sha256_val   = job["sha256"] or ""   # uploaded file = report / cache key
     report_url   = url_for("bp.report_sha", sha256=sha256_val, _external=False) if sha256_val else None
     report_json_url = url_for("bp.report_sha_json", sha256=sha256_val, _external=False) if sha256_val else None
+    # "sha256" = the file the verdict is about (promoted inner file for archives); container_sha256 = the
+    # uploaded container when a file inside it was promoted (else null); sha256_source says which one
+    # "sha256" holds — "original_upload" for older reports that did not record the promoted file's hash
+    analyzed_sha, sha_source, upload_sha = analyzed_sha256(report)
+    promoted = bool(report.get("promoted_sample"))
+    container_sha = (upload_sha or sha256_val) if promoted else None
+    if not analyzed_sha:
+        analyzed_sha, sha_source = sha256_val, "original_upload" if promoted else "analyzed_file"
 
     sl = report.get("strings_llm", {}) or {}
 
@@ -243,7 +258,9 @@ def _build_result(job: dict, include: set[str]) -> dict:
         "heuristic_score": h.get("score", 0),
         "strings_score":   sl.get("strings_score", 0),
         "strings_summary": sl.get("summary", ""),
-        "sha256":      sha256_val,
+        "sha256":      analyzed_sha,
+        "container_sha256": container_sha,
+        "sha256_source":    sha_source,
         "report_url":      report_url,
         "report_json_url": report_json_url,
         "tools_used":   tools_used,
@@ -252,10 +269,12 @@ def _build_result(job: dict, include: set[str]) -> dict:
             risk_level=v.get("risk_level", "unknown"),
             confidence=v.get("confidence", 0),
             file_type=v.get("file_type", ""),
-            sha256=sha256_val,
+            sha256=analyzed_sha,
             report_url=report_url,
             report_json_url=report_json_url,
             heuristic_score=h.get("score", 0),
+            container_sha256=container_sha,
+            sha256_source=sha_source,
             top_reasons=v.get("top_reasons", []),
             strings_score=sl.get("strings_score", 0),
             strings_summary=sl.get("summary", ""),
@@ -433,7 +452,7 @@ def api_analyze():
 
     # SHA-256 shortcut — if already analyzed, return immediately without a job
     if sha256_lookup:
-        cached = _get_cached_recent(sha256_lookup)
+        cached = _get_cached_recent_any(sha256_lookup)   # uploaded file's or promoted inner file's hash
         if cached and cached.get("report_json"):
             job_id = str(uuid.uuid4())
             _job_create(job_id, key["key_id"], cached.get("filename", ""))

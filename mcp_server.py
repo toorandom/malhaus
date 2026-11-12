@@ -105,6 +105,8 @@ def _fmt(data: dict) -> str:
     conf    = v.get("confidence", 0)
     ftype   = v.get("file_type", "unknown")
     sha     = data.get("sha256", "")
+    csha    = data.get("container_sha256")
+    ssrc    = data.get("sha256_source", "analyzed_file")
     heur    = data.get("heuristic_score", "?")
     reasons = data.get("top_reasons") or v.get("top_reasons") or []
     iocs    = v.get("iocs") or data.get("iocs") or {}
@@ -113,7 +115,10 @@ def _fmt(data: dict) -> str:
     lines = [
         f"Verdict: {risk}  (confidence {conf}%){' [cached]' if cached else ''}",
         f"File type: {ftype}",
-        f"SHA-256: {sha}",
+        f"SHA-256: {sha}" + (" (analysed file inside the uploaded container)" if csha and ssrc == "analyzed_file" else
+                              " (ORIGINAL uploaded file — the promoted inner file's hash is not available for this report)"
+                              if csha else ""),
+    ] + ([f"Container SHA-256: {csha}"] if csha and ssrc == "analyzed_file" else []) + [
         f"Heuristic score: {heur}/100",
         "",
         "Top reasons:",

@@ -277,6 +277,57 @@ def _get_cached_recent(sha256: str):
     finally:
         con.close()
 
+_RE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def analyzed_sha256(result: dict) -> tuple:
+    """(sha256 of the file the verdict is about, source, uploaded file's sha256).
+
+    preflight.sha256.stdout is sha256sum output: line 1 = uploaded file (the report/cache key); when an
+    archive's inner file was promoted, line 2 = that analysed file. Reports created before that second line
+    existed only know the uploaded file's hash: source "original_upload" says so explicitly.
+    source: "analyzed_file" (upload analysed as-is, or promoted file's own hash) | "original_upload"."""
+    pre = (result or {}).get("preflight") or {}
+    lines = [l.split() for l in ((pre.get("sha256") or {}).get("stdout") or "").strip().splitlines() if l.split()]
+    upload = lines[0][0].lower() if lines else ""
+    if not (result or {}).get("promoted_sample"):
+        return upload, "analyzed_file", upload
+    if len(lines) > 1 and _RE_SHA256.match(lines[1][0].lower()):
+        return lines[1][0].lower(), "analyzed_file", upload
+    return upload, "original_upload", upload
+
+
+def _report_key_for_sha(sha256: str):
+    """web_recents key (uploaded file's sha256) for a hash that is either that key or the hash of the inner
+    file analysed after promotion. None if unknown."""
+    sha = (sha256 or "").strip().lower()
+    if not _RE_SHA256.match(sha):
+        return None
+    _ensure_tables()
+    con = _db()
+    try:
+        if con.execute("SELECT 1 FROM web_recents WHERE sha256 = ? LIMIT 1", (sha,)).fetchone():
+            return sha
+        # promoted inner file: its hash is on line 2 of preflight.sha256.stdout — verify, a hash appearing
+        # elsewhere in a report (e.g. a sub-component) is not that report's subject
+        for row in con.execute("SELECT sha256, report_json FROM web_recents WHERE report_json LIKE ? "
+                               "ORDER BY analyzed_at DESC LIMIT 20", (f"%{sha}%",)):
+            try:
+                if analyzed_sha256(json.loads(row["report_json"] or "{}"))[0] == sha:
+                    return row["sha256"]
+            except ValueError:
+                continue
+    finally:
+        con.close()
+    return None
+
+
+def _get_cached_recent_any(sha256: str):
+    """_get_cached_recent for either the uploaded file's hash or a promoted inner file's hash."""
+    key = _report_key_for_sha(sha256)
+    return _get_cached_recent(key) if key else None
+
+
 def _write_recent(filename: str, sha256: str, kind: str, ip: str, risk: str, conf: int, score: int, report_json: str):
     _ensure_tables()
     analyzed_at = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -417,9 +468,11 @@ def about():
 @bp.get("/report/<sha256>")
 def report_sha(sha256: str):
     """
-    View cached result by sha256 (no re-analysis).
+    View cached result by sha256 (no re-analysis). Accepts the uploaded file's hash or, for archives whose
+    inner file was promoted, the analysed inner file's hash.
     """
     _ensure_tables()
+    sha256 = _report_key_for_sha(sha256) or sha256
     con = _db()
     try:
         row = con.execute(
@@ -461,8 +514,10 @@ def report_sha(sha256: str):
 
 @bp.get("/report/<sha256>/json")
 def report_sha_json(sha256: str):
-    """Return the raw analysis JSON for a given SHA-256 (same data as the web report)."""
+    """Return the raw analysis JSON for a given SHA-256 (same data as the web report). Accepts the uploaded
+    file's hash or a promoted inner file's hash."""
     _ensure_tables()
+    sha256 = _report_key_for_sha(sha256) or sha256
     con = _db()
     try:
         rec = con.execute(

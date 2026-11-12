@@ -74,13 +74,22 @@
               <div class="k">File type</div>
               <div class="v mono break">{{ v.get('file_type','') }}</div>
             </div>
+            {% set sh = (p.get('sha256', {}) or {}).get('stdout','') %}
+            {% set sh_lines = sh.strip().splitlines() if sh else [] %}
             <div class="kv">
-              <div class="k">SHA-256</div>
+              <div class="k">SHA-256{% if promoted %} <span class="muted">(original file{% if filename %}: {{ filename }}{% endif %})</span>{% endif %}</div>
+              <div class="v mono break">{{ (sh.split()[0] if sh else '') }}</div>
+            </div>
+            {% if promoted %}
+            <div class="kv">
+              <div class="k">SHA-256 <span class="muted">(analysed file: {{ promoted.split('/')[-1] }})</span></div>
               <div class="v mono break">
-                {% set sh = (p.get('sha256', {}) or {}).get('stdout','') %}
-                {{ (sh.split()[0] if sh else '') }}
+                {% if sh_lines|length > 1 and sh_lines[1].split() %}{{ sh_lines[1].split()[0] }}
+                {% else %}<span class="muted" style="font-family:inherit;">not available for this report (it predates promoted-file hashing) —
+                the SHA-256 above is of the original file{% if filename %} {{ filename }}{% endif %}, not of the analysed {{ promoted.split('/')[-1] }}</span>{% endif %}
               </div>
             </div>
+            {% endif %}
             <div class="kv">
               <div class="k">Entropy</div>
               <div class="v mono">{{ (p.get('entropy', {}) or {}).get('entropy','') }}</div>

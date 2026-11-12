@@ -263,7 +263,9 @@ def analyze_subcomponents(pre: Dict[str, Any], sample: str, options: Optional[Di
              + (f", {skipped['unsupported']} unsupported type" if skipped["unsupported"] else "")
              + (f", {skipped['duplicate']} duplicate" if skipped["duplicate"] else "")]
     if promoted:
-        lines.append(f"Promoted file (main analysis above): {promoted}")
+        _sh = (pre.get("sha256") or {}).get("stdout", "").splitlines()
+        _psha = _sh[1].split()[0] if len(_sh) > 1 and _sh[1].split() else ""
+        lines.append(f"Promoted file (main analysis above): {promoted}" + (f"  sha256={_psha}" if _psha else ""))
     if worst:
         lines.append(f"Worst: {worst['chain']} — score {worst['score']}/100 ({worst['risk_hint']})")
     lines.append("")

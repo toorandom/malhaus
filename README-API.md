@@ -220,6 +220,8 @@ Poll a job for status and results. Only the key that submitted the job can poll 
   "status":   "done",
   "job_id":   "3f2e1a...",
   "sha256":   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "container_sha256": null,
+  "sha256_source": "analyzed_file",
   "report_url": "/report/e3b0c442...",
   "verdict": {
     "risk_level": "likely_malware",
@@ -491,3 +493,13 @@ if result.get("takens2d") and result["takens2d"].get("b64"):
   lists each one (path inside the object, type, score, reasons, path on disk); every other `tool_outputs.<tool>.stdout`
   also carries that tool's output for each inner file after a `===== sub-component: <outer ▸ inner> (<type>) =====`
   header, so parse a tool's own section up to the first such header. Sub-component findings appear in `top_reasons`.
+- Promoted files (archives whose inner file is analysed instead of the upload):
+  - `sha256` — hash of the file the verdict is about: the promoted inner file (e.g. the EXE inside the ZIP/7z), or the
+    upload itself when nothing was promoted. Same key name as before.
+  - `container_sha256` — hash of the uploaded container when a file inside it was promoted, otherwise `null`.
+  - `sha256_source` — `"analyzed_file"` (normal) or `"original_upload"`: reports created before promoted-file hashes were
+    recorded only know the upload's hash, so `sha256` is then the ORIGINAL uploaded file's hash, not the analysed one's
+    (`container_sha256` equals it).
+  - `report_url` / `report_json_url` stay keyed by the uploaded file; `GET /report/<sha256>[/json]` and
+    `POST /api/v1/analyze` with `sha256` accept either hash.
+  - `tool_outputs.sha256.stdout` is `sha256sum` output: line 1 = uploaded file, line 2 (when promoted) = analysed file.

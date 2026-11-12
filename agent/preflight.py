@@ -268,6 +268,11 @@ def preflight(sample: str, options: Dict[str, Any] | None = None, progress_cb=No
             depth_note = f" (nested {depth} level{'s' if depth != 1 else ''} deep)" if depth > 0 else ""
             cb(f"{inner_kind.upper()} found inside archive{depth_note}: {inner_name} — promoting to full {inner_kind} analysis")
             pre["effective_sample"] = inner
+            # sha256sum-style second line: the file actually analysed. The first token stays the uploaded
+            # container's hash (report key, cache key, API "sha256") for every existing reader.
+            _ph = sha256(inner)
+            if (_ph.get("stdout") or "").strip() and isinstance(pre.get("sha256"), dict):
+                pre["sha256"]["stdout"] = (pre["sha256"].get("stdout") or "").rstrip("\n") + "\n" + _ph["stdout"].strip() + "\n"
             pre["container_kind"] = "archive"
 
             # UPX check for PE/ELF before anything else

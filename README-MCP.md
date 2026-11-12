@@ -56,7 +56,7 @@ API on your behalf. It is **not** exposed to MCP clients and never leaves the se
 |------|------------|--------------|
 | `analyze_file` | `file_b64` (required), `filename` (optional) | Analyze a file from base64-encoded content. The client reads the file and encodes it. |
 | `analyze_url` | `url` (required) | Tell the server to download a file from an HTTP/HTTPS URL and analyze it. |
-| `analyze_sha256` | `sha256` (required) | Retrieve a cached result for a previously analyzed file. Instant if found. |
+| `analyze_sha256` | `sha256` (required) | Retrieve a cached result for a previously analyzed file — the uploaded file's hash or, for archives, the hash of the inner file that was analysed. Instant if found. |
 
 All three tools return a plain-text summary:
 
@@ -74,6 +74,10 @@ Top reasons:
 
 Full report: https://your-malhaus-instance.example.com/report/4d4a8de9f4...
 ```
+
+When an archive was uploaded and a file inside it was analysed, `SHA-256` is the analysed inner file and a
+`Container SHA-256:` line gives the uploaded archive. Reports created before inner-file hashes were recorded say
+`SHA-256: <hash> (ORIGINAL uploaded file — the promoted inner file's hash is not available for this report)`.
 
 ---
 
